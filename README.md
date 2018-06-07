@@ -18,6 +18,8 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | Debian        | 9 Stretch      | AMD64        | :heavy_check_mark:       |                      |
 | Debian        | 8 Jessie       | X86/AMD64    | :heavy_check_mark:       |                      |
 | Arch Linux    | N/A            | ARM32        | :heavy_check_mark:       | Raspberry Pi 2 B+    |
+| OpenSUSE      | Leap 15.0      | AMD64        | :heavy_check_mark:       |                      |
+| OpenSUSE      | Tumbleweed     | X86/AMD64    | :heavy_check_mark:       | 2018.05.30           |
 | FreeBSD       | 11.1           | AMD64        | :heavy_check_mark:       |                      |
 | FreeBSD       | 10.4           | AMD64        | :heavy_check_mark:       |                      |
 | OpenDSD       | 6.2            | AMD64        | :x:                      |                      |

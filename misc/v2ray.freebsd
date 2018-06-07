@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# PROVIDE: v2ray
+# REQUIRE: DAEMON NETWORKING
+# KEYWORD: FreeBSD
+# AUTHOR: Kotarou
+#
+# Enable this script by adding:
+# v2ray_enable="YES"
+# to /etc/rc.conf
+
+. /etc/rc.subr
+
+name=v2ray
+rcvar=v2ray_enable
+v2ray_user="v2ray"
+v2ray_command="/usr/local/bin/v2ray -config /usr/local/etc/v2ray/config.json"
+pidfile="/var/run/v2ray/${name}.pid"
+
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -r -f ${v2ray_command}"
+
+load_rc_config $name
+: ${v2ray_enable:=no}
+
+run_rc_command "$1"

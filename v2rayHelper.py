@@ -21,33 +21,51 @@ class UnsupportedPlatform(Exception):
     pass
 
 
+def execute_external_command(command):
+    return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+
+
+def chown(path, user=None, group=None):
+    if user is not None:
+        shutil.chown(path, user=user)
+    if group is not None:
+        shutil.chown(path, group=group)
+
+
+def mkdir(path, perm=0o755):
+    if not os.path.exists(path) and not os.path.islink(path):
+        os.mkdir(path, perm)
+
+
+def mkdir_chown(path, perm=0o755, user=None, group=None):
+    mkdir(path, perm)
+    chown(path, user, group)
+
+
 def replace_content_in_file(filename, replace_pair):
     with fileinput.FileInput(filename, inplace=True) as file:
         for line in file:
             for replace in replace_pair:
                 line = line.replace(replace[0], replace[1])
-
             print(line, end='')
-    file.close()
 
 
-def closure_try(__try, __except, __on_failure):
+def closure_try(__try, __except, __on_except):
     try:
         return __try()
     except __except:
-        return __on_failure()
+        return __on_except()
 
 
 def is_command_exists(command):
     def _try():
-        subprocess.check_call('type {}'.format(command), shell=True, stderr=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL)
+        execute_external_command('type {}'.format(command))
         return True
 
-    def __on_failure():
+    def _except():
         return False
 
-    return closure_try(_try, subprocess.CalledProcessError, __on_failure)
+    return closure_try(_try, subprocess.CalledProcessError, _except)
 
 
 def which_command_exists(commands):
@@ -71,27 +89,22 @@ def os_is(os_name):
         return platform.system().lower() == os_name.lower()
 
 
-def get_os():
-    return '{0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
+def os_is_bsd():
+    return os_is(['openbsd', 'freebsd', 'netbsd'])
 
 
-def get_v2ray_path(name=None):
-    process_name = name if name is not None else 'v2ray'
-    return subprocess.check_output('which {}'.format(process_name), shell=True, stderr=subprocess.DEVNULL) \
-        .rstrip().decode("utf-8")
+def os_is_nix():
+    return os_is_bsd() or os_is('linux')
 
 
 def get_v2ray_version():
     def _try():
-        command = '{} --version'.format(get_v2ray_path())
-        version = subprocess.check_output(command, shell=True).decode("utf-8").split()
+        return execute_external_command('v2ray --version').split()[1]
 
-        return version[1]
-
-    def __on_failure():
+    def _except():
         return None
 
-    return closure_try(_try, subprocess.CalledProcessError, __on_failure)
+    return closure_try(_try, subprocess.CalledProcessError, _except)
 
 
 def get_download_url(version, file):
@@ -104,7 +117,9 @@ def is_systemd():
 
 def v2ray_service(command):
     if is_systemd():
-        subprocess.check_call('systemctl {} v2ray'.format(command), shell=True)
+        execute_external_command('systemctl {} v2ray'.format(command))
+    else:
+        execute_external_command('service v2ray {}'.format(command))
 
 
 def get_os_info():
@@ -112,17 +127,21 @@ def get_os_info():
     arch = platform.architecture()[0][0:2]
     machine = platform.machine()
 
-    standard_os = ['Linux', 'FreeBSD']
-    standard_arch = ['X86_64', 'I386']
-    arm_arch32 = ['armv7l', 'armv7', 'armv7hf', 'armv7hl']
-    arm_arch64 = ['armv8']
+    supported = {
+        'os': ['Linux', 'FreeBSD', 'OpenBSD'],
+        'arch': ['X86_64', 'I386'],
+        'arm': {
+            'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
+            'arm64': ['armv8']
+        }
+    }
 
-    if system in standard_os:
-        if machine not in standard_arch:
-            if machine in arm_arch32:
-                arch = 'arm'
-            elif machine in arm_arch64:
-                arch = 'arm64'
+    if system in supported['os']:
+        if machine not in supported['arch']:
+            for key in supported['arm']:
+                if machine in supported['arm'][key]:
+                    arch = key
+                    break
 
         return [system.lower(), arch, platform.architecture()[0], machine]
 
@@ -156,11 +175,11 @@ def download_file(url, file_name=None):
     if file_name is None:
         file_name = base_name
 
-    temporary_file = '{}.{}'.format(file_name, 'v2tmp')
+    temp_file_name = '{}.{}'.format(file_name, 'v2tmp')
 
     # delete temp file
-    if os.path.exists(temporary_file):
-        os.remove(temporary_file)
+    if os.path.exists(temp_file_name):
+        os.remove(temp_file_name)
 
     start_time = time.time()
 
@@ -179,36 +198,42 @@ def download_file(url, file_name=None):
         read_so_far = block_num * block_size
         if total_size > 0:
             duration = int(time.time() - start_time)
-            progress_size = int(block_num * block_size)
-            speed = progress_size / duration if duration != 0 else 1
+            speed = int(read_so_far) / duration if duration != 0 else 1
             percent = read_so_far * 1e2 / total_size
-            estimate = int(total_size / speed) if speed != 0 else 0
-            if percent > 100.00:
-                percent = 100.00
+            estimate = int((total_size - read_so_far) / speed) if speed != 0 else 0
+            percent = 100.00 if percent > 100.00 else percent
 
-            sys.stdout.write(
-                "\rFetching: {:<25} {:5.2f}% {:>15} {:>15}/s {:>15s} {:<10}".format(base_name, percent,
-                                                                                    __format_size(total_size),
-                                                                                    __format_size(speed), str(
-                        datetime.timedelta(seconds=estimate)), 'ETA')
-            )
+            # clear line if available
+            if is_command_exists('stty'):
+                width = int(execute_external_command('stty size').split()[1])
+                sys.stdout.write('\r{:>{width}}'.format('', width=width))
 
-            if read_so_far >= total_size:  # near the end
-                sys.stdout.write("\n")
-        else:  # total size is unknown
+            basic_format = '\rFetching: {:<25} {:5.2f}% {:>15} {:>15}/s {:>15s} {:<3}\n{}'
+            if read_so_far < total_size:
+                sys.stdout.write(
+                    basic_format.format(base_name, percent, __format_size(total_size), __format_size(speed),
+                                        str(datetime.timedelta(seconds=estimate)), 'ETA', '\b')
+                )
+            else:
+                # near the end
+                sys.stdout.write(
+                    basic_format.format(base_name, percent, __format_size(total_size), __format_size(speed),
+                                        str(datetime.timedelta(seconds=duration)), '', '')
+                )
+        # total size is unknown
+        else:
             # TODO format output
             sys.stdout.write("\r read {}".format(read_so_far))
 
         sys.stdout.flush()
 
-    urllib.request.urlretrieve(url, temporary_file, __report_hook)
-    os.rename(temporary_file, file_name)
+    urllib.request.urlretrieve(url, temp_file_name, __report_hook)
+    os.rename(temp_file_name, file_name)
 
 
 def extract_file(path, output):
-    with zipfile.ZipFile(path, "r") as zip_ref:
+    with zipfile.ZipFile(path, 'r') as zip_ref:
         zip_ref.extractall(output)
-    zip_ref.close()
 
     # remove zip file
     os.remove(path)
@@ -250,7 +275,6 @@ def get_extracted_path(filename, version):
     return '-'.join(split_folder)
 
 
-# TODO add script for systemd, openrc, ...
 def install_start_script():
     if os_is('linux'):
         # create systemd file or rc.d
@@ -262,8 +286,23 @@ def install_start_script():
         else:
             # todo add support for legacy init scripts
             pass
-    elif os_is('freebsd'):
-        pass
+    elif os_is_bsd():
+        download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.freebsd', 'v2ray')
+
+        shutil.move('./v2ray', '/usr/local/etc/rc.d/v2ray')
+        os.chmod('/usr/local/etc/rc.d/v2ray', 0o555)
+
+        # create folder for pid file
+        mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
+
+
+def enable_auto_start():
+    if os_is_bsd():
+        with open('/etc/rc.conf', 'a+') as file:
+            file.write('\nv2ray_enable="YES"')
+    elif os_is('linux'):
+        if is_systemd():
+            v2ray_service('enable')
 
 
 def install_default_config_file():
@@ -271,19 +310,19 @@ def install_default_config_file():
 
     if os_is('linux'):
         conf_dir = '/etc/v2ray'
-    elif os_is('freebsd'):
+    elif os_is_bsd():
         conf_dir = '/usr/local/etc/v2ray'
 
     if conf_dir is not None:
         # create default configuration file path
-        if not os.path.exists(conf_dir):
-            os.mkdir(conf_dir, 0o755)
+        mkdir(conf_dir, 0o755)
 
         # download config file
         download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/config.json',
                       'config.json')
         shutil.move('config.json', '{}/config.json'.format(conf_dir))
 
+        # replace default value with randomly generated one
         replace = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
         replace_content_in_file('{}/config.json'.format(conf_dir), [
             ['dbe16381-f905-4b88-946f-dfc21ed9be29', replace[0]],
@@ -297,6 +336,7 @@ def install_default_config_file():
 
 def add_user(_user_ame=None):
     name = _user_ame if _user_ame is not None else 'v2ray'
+    prefix = 'pw ' if os_is('freebsd') else ''
 
     def _try_group():
         import grp
@@ -307,13 +347,15 @@ def add_user(_user_ame=None):
         pwd.getpwnam(name)
 
     def _try_add_group():
-        print('Group {} does not exist.'.format(name))
-        subprocess.check_output('groupadd {}'.format(name), shell=True, stderr=subprocess.DEVNULL)
+        execute_external_command('{}groupadd {}'.format(prefix, name))
 
     def _try_add_user():
-        print('Group {} does not exist.'.format(name))
-        create_user = 'useradd {0} -md /var/lib/{0} -s /sbin/nologin -g {0}'.format(name)
-        subprocess.check_output(create_user, shell=True, stderr=subprocess.DEVNULL)
+        # delete if exists
+        if os.path.exists('/var/lib/{}'.format(name)):
+            shutil.rmtree('/var/lib/{}'.format(name))
+
+        create_user = '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'.format(prefix, name)
+        execute_external_command(create_user)
 
     # add group
     closure_try(_try_group, KeyError, _try_add_group)
@@ -322,19 +364,21 @@ def add_user(_user_ame=None):
     closure_try(_try_user, KeyError, _try_add_user)
 
 
-def print_installed_version(msg):
+def download_and_place_v2ray(version, filename, msg):
     print('Currently installed version: {}, {}...'.format(get_v2ray_version(), msg))
+
+    download_file(get_download_url(version, filename), filename)
+    extract_file(filename, '.')
+    return place_file(get_extracted_path(filename, version))
 
 
 def updater(filename, version, force=False):
     if version != get_v2ray_version() or force:
         if force:
             print('You already installed the latest version, force to update')
-        print_installed_version('updating')
 
-        download_file(get_download_url(version, filename), filename)
-        extract_file(filename, '.')
-        place_file(get_extracted_path(filename, version))
+        # download and place file
+        download_and_place_v2ray(version, filename, 'updating')
 
         # restart v2ray
         v2ray_service('restart')
@@ -344,21 +388,14 @@ def updater(filename, version, force=False):
 
 
 def installer(filename, version):
-    print_installed_version('installing')
+    installed_path = download_and_place_v2ray(version, filename, 'installing')
 
-    download_file(get_download_url(version, filename), filename)
-    extract_file(filename, '.')
-    installed_path = place_file(get_extracted_path(filename, version))
+    # create soft link, for linux /usr/bin, bsd /usr/local/bin
+    base_path = '/usr{}/bin'.format('/local' if os_is_bsd() else '')
+    executables = ['v2ray', 'v2ctl']
 
-    # create soft link
-    link = ['/usr/bin/', ['v2ray', 'v2ctl']]
-
-    # for FreeBSD
-    if os_is('freebsd'):
-        link[0] = '/usr/local/bin/'
-
-    for file in link[1]:
-        full_path = link[0] + file
+    for file in executables:
+        full_path = '{}/{}'.format(base_path, file)
 
         # delete old one
         if os.path.exists(full_path) or os.path.islink(full_path):
@@ -367,16 +404,20 @@ def installer(filename, version):
         # create symbol link
         os.symlink(installed_path + file, full_path)
 
+    # add user
+    add_user()
+
+    # script
     install_start_script()
+    enable_auto_start()
 
     # download and place the default config file
     conf = install_default_config_file()
 
-    # add user
-    add_user()
-
     # start v2ray
     v2ray_service('start')
+
+    # print message
     print('Successfully installed v2ray-{}'.format(info[1]))
     print()
     print('v2ray is now bind on 0.0.0.0:{}'.format(conf[1]))
@@ -395,11 +436,13 @@ def print_help():
     exit(0)
 
 
-def command_line_parser():
+def parse_command_line_input():
     available_mode = ['auto', 'install', 'update']
+
+    argc = len(sys.argv)
     args = {'script_name': os.path.basename(sys.argv[0]), 'help': False, 'force': False, 'mode': 'auto'}
 
-    if len(sys.argv) > 1:
+    if argc > 1:
         if sys.argv[1] == '--help':
             args['help'] = True
         else:
@@ -408,7 +451,7 @@ def command_line_parser():
             else:
                 args['help'] = True
 
-        if len(sys.argv) > 2:
+        if argc > 2:
             if sys.argv[2] == '--force':
                 args['force'] = True
 
@@ -417,7 +460,7 @@ def command_line_parser():
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, handler)
-    args = command_line_parser()
+    args = parse_command_line_input()
     install_status = is_command_exists('v2ray')
 
     if args['help']:
@@ -425,7 +468,7 @@ if __name__ == "__main__":
     try:
         operating_system = get_os_info()
 
-        if os_is(['linux', 'freebsd']):
+        if os_is_nix():
             if os.getuid() == 0:
                 info = get_latest_version_from_api(*operating_system)
                 if args['mode'] == 'auto':
@@ -443,13 +486,13 @@ if __name__ == "__main__":
                         sys.exit('v2ray must be installed before you can update it.')
                     else:
                         if args['force'] is True:
-                            updater(*info, True)
+                            updater(*info, force=True)
                         else:
                             updater(*info)
             else:
                 # ask for root privileges
                 if is_command_exists('sudo'):
-                    print('You need root privileges to run this script, re-lunching...')
+                    print('Re-lunching with root privileges...')
                     os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
                 elif is_command_exists('su'):
                     print('You need root privileges to run this script, re-lunching...')
@@ -457,4 +500,6 @@ if __name__ == "__main__":
                 else:
                     sys.exit('Sorry, cannot gain root privilege')
     except UnsupportedPlatform:
-        sys.exit('Unsupported platform: {}'.format(get_os()))
+        sys.exit(
+            'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
+        )

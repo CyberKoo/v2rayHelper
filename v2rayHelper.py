@@ -108,6 +108,14 @@ def os_is_nix():
     return os_is_bsd() or os_is('linux')
 
 
+def os_is_mac():
+    return os_is('Darwin')
+
+
+def os_is_supported():
+    return os_is_nix() or os_is_mac()
+
+
 def get_v2ray_version():
     def _try():
         return execute_external_command('v2ray --version').split()[1]
@@ -142,7 +150,7 @@ def get_os_info():
         }
     }
 
-    if os_is_nix():
+    if os_is_supported():
         if machine not in supported['arch']:
             for key in supported['arm']:
                 if machine in supported['arm'][key]:
@@ -459,6 +467,27 @@ def installer(filename, version):
     print('uuid: {}'.format(conf[0]))
 
 
+def mac_install():
+    # check if brew is installed
+    if is_command_exists('brew'):
+        # Install the official tap
+        print('Install the official tap...')
+        execute_external_command('brew tap v2ray/v2ray')
+
+        # install v2ray
+        print('Install v2ray...')
+        execute_external_command('brew install v2ray-core')
+
+        # set auto-start
+        print('register v2ray to launch at login...')
+        execute_external_command('brew services start v2ray-core')
+
+        # print message
+        print('Successfully installed v2ray')
+    else:
+        sys.exit('This script requires Homebrew')
+
+
 def handler(signum, frame):
     print('\nKeyboard interrupt!!! Clean-up')
     for file in Path('.').glob('*.v2tmp'):
@@ -502,37 +531,40 @@ if __name__ == "__main__":
     try:
         operating_system = get_os_info()
 
-        if os_is_nix():
-            if os.getuid() == 0:
-                info = get_latest_version_from_api(*operating_system)
-                if args['mode'] == 'auto':
-                    if install_status:
-                        upgrader(*info)
-                    else:
-                        installer(*info)
-                elif args['mode'] == 'install':
-                    if install_status is False or args['force'] is True:
-                        installer(*info)
-                    else:
-                        sys.exit('v2ray is already installed, use --force to reinstall.')
-                elif args['mode'] == 'upgrade':
-                    if install_status is False:
-                        sys.exit('v2ray must be installed before you can upgrade it.')
-                    else:
-                        if args['force'] is True:
-                            upgrader(*info, force=True)
-                        else:
+        if os_is_supported():
+            if os_is_nix():
+                if os.getuid() == 0:
+                    info = get_latest_version_from_api(*operating_system)
+                    if args['mode'] == 'auto':
+                        if install_status:
                             upgrader(*info)
-            else:
-                # ask for root privileges
-                if is_command_exists('sudo'):
-                    print('Re-lunching with root privileges...')
-                    os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
-                elif is_command_exists('su'):
-                    print('Re-lunching with root privileges...')
-                    os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
+                        else:
+                            installer(*info)
+                    elif args['mode'] == 'install':
+                        if install_status is False or args['force'] is True:
+                            installer(*info)
+                        else:
+                            sys.exit('v2ray is already installed, use --force to reinstall.')
+                    elif args['mode'] == 'upgrade':
+                        if install_status is False:
+                            sys.exit('v2ray must be installed before you can upgrade it.')
+                        else:
+                            if args['force'] is True:
+                                upgrader(*info, force=True)
+                            else:
+                                upgrader(*info)
                 else:
-                    sys.exit('Sorry, cannot gain root privilege.')
+                    # ask for root privileges
+                    if is_command_exists('sudo'):
+                        print('Re-lunching with root privileges...')
+                        os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
+                    elif is_command_exists('su'):
+                        print('Re-lunching with root privileges...')
+                        os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
+                    else:
+                        sys.exit('Sorry, cannot gain root privilege.')
+            elif os_is_mac():
+                mac_install()
     except UnsupportedPlatform:
         sys.exit(
             'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())

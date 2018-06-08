@@ -467,23 +467,27 @@ def installer(filename, version):
     print('uuid: {}'.format(conf[0]))
 
 
-def mac_install():
+def mac_install(force):
     # check if brew is installed
     if is_command_exists('brew'):
-        # Install the official tap
-        print('Install the official tap...')
-        execute_external_command('brew tap v2ray/v2ray')
+        # already installed
+        if not is_command_exists('v2ray') or force:
+            # Install the official tap
+            print('Install the official tap...')
+            execute_external_command('brew tap v2ray/v2ray')
 
-        # install v2ray
-        print('Install v2ray...')
-        execute_external_command('brew install v2ray-core')
+            # install v2ray
+            print('Install v2ray...')
+            execute_external_command('brew install v2ray-core')
 
-        # set auto-start
-        print('register v2ray to launch at login...')
-        execute_external_command('brew services start v2ray-core')
+            # set auto-start
+            print('register v2ray to launch at login...')
+            execute_external_command('brew services start v2ray-core')
 
-        # print message
-        print('Successfully installed v2ray')
+            # print message
+            print('Successfully installed v2ray')
+        else:
+            print('v2ray is already installed, use --force to force install')
     else:
         sys.exit('This script requires Homebrew')
 
@@ -564,7 +568,7 @@ if __name__ == "__main__":
                     else:
                         sys.exit('Sorry, cannot gain root privilege.')
             elif os_is_mac():
-                mac_install()
+                mac_install(args['force'])
     except UnsupportedPlatform:
         sys.exit(
             'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())

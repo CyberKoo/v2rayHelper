@@ -48,10 +48,10 @@ python3 v2rayHelper.py install
 python3 v2rayHelper.py install --force
 ```
 
-#### Update v2ray
+#### Upgrade v2ray
 This command requires v2ray to be already installed.
 ```shell
-python3 v2rayHelper.py update
+python3 v2rayHelper.py upgrade
 ```
 
 ## License

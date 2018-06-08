@@ -21,33 +21,44 @@ class UnsupportedPlatform(Exception):
     pass
 
 
-def execute_external_command(command):
-    return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+def execute_external_command(_command):
+    return subprocess.check_output(_command, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
 
 
-def chown(path, user=None, group=None):
-    if user is not None:
-        shutil.chown(path, user=user)
-    if group is not None:
-        shutil.chown(path, group=group)
+def remove_if_exists(_path):
+    if os.path.exists(_path):
+        if os.path.isdir(_path):
+            shutil.rmtree(_path)
+        else:
+            os.unlink(_path)
 
 
-def mkdir(path, perm=0o755):
-    if not os.path.exists(path) and not os.path.islink(path):
-        os.mkdir(path, perm)
+def chown(_path, _user=None, _group=None):
+    if _user is None and _group is None:
+        raise RuntimeError
+
+    if _user is not None:
+        shutil.chown(_path, user=_user)
+    if _group is not None:
+        shutil.chown(_path, group=_group)
 
 
-def mkdir_chown(path, perm=0o755, user=None, group=None):
-    mkdir(path, perm)
-    chown(path, user, group)
+def mkdir(_path, _perm=0o755):
+    if not os.path.exists(_path) and not os.path.islink(_path):
+        os.mkdir(_path, _perm)
 
 
-def replace_content_in_file(filename, replace_pair):
-    with fileinput.FileInput(filename, inplace=True) as file:
+def mkdir_chown(_path, _perm=0o755, _user=None, _group=None):
+    mkdir(_path, _perm)
+    chown(_path, _user, _group)
+
+
+def replace_content_in_file(_filename, _replace_pair):
+    with fileinput.FileInput(_filename, inplace=True) as file:
         for line in file:
-            for replace in replace_pair:
+            for replace in _replace_pair:
                 line = line.replace(replace[0], replace[1])
-            print(line, end='')
+            print(line)
 
 
 def closure_try(__try, __except, __on_except):
@@ -57,9 +68,9 @@ def closure_try(__try, __except, __on_except):
         return __on_except()
 
 
-def is_command_exists(command):
+def is_command_exists(_command):
     def _try():
-        execute_external_command('type {}'.format(command))
+        execute_external_command('type {}'.format(_command))
         return True
 
     def _except():
@@ -68,9 +79,9 @@ def is_command_exists(command):
     return closure_try(_try, subprocess.CalledProcessError, _except)
 
 
-def which_command_exists(commands):
-    if is_collection(commands):
-        for command in commands:
+def which_command_exists(_commands):
+    if is_collection(_commands):
+        for command in _commands:
             if is_command_exists(command):
                 return command
         return None
@@ -78,8 +89,8 @@ def which_command_exists(commands):
         raise TypeError
 
 
-def is_collection(arg):
-    return True if hasattr(arg, '__iter__') and not isinstance(arg, (str, bytes)) else False
+def is_collection(_arg):
+    return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
 
 
 def os_is(os_name):
@@ -107,12 +118,8 @@ def get_v2ray_version():
     return closure_try(_try, subprocess.CalledProcessError, _except)
 
 
-def get_download_url(version, file):
-    return 'https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, file)
-
-
 def is_systemd():
-    return os.path.exists('/run/systemd/system') and os.path.isdir('/run/systemd/system')
+    return os.path.isdir('/run/systemd/system')
 
 
 def v2ray_service(command):
@@ -128,7 +135,6 @@ def get_os_info():
     machine = platform.machine()
 
     supported = {
-        'os': ['Linux', 'FreeBSD', 'OpenBSD'],
         'arch': ['X86_64', 'I386'],
         'arm': {
             'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
@@ -136,7 +142,7 @@ def get_os_info():
         }
     }
 
-    if system in supported['os']:
+    if os_is_nix():
         if machine not in supported['arch']:
             for key in supported['arm']:
                 if machine in supported['arm'][key]:
@@ -148,7 +154,7 @@ def get_os_info():
     raise UnsupportedPlatform
 
 
-def get_latest_version_from_api(os, arch, arch_1, machine):
+def get_latest_version_from_api(os, arch, arch_num, machine):
     api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
 
     with urllib.request.urlopen(api_url) as response:
@@ -157,34 +163,32 @@ def get_latest_version_from_api(os, arch, arch_1, machine):
         latest_version = json_response['tag_name']
 
         print('Hi there, the latest version of v2ray is {} {}'.format(latest_version, pre_release))
-        print('Operating system: {}-{} ({})'.format(os, arch_1, machine))
+        print('Operating system: {}-{} ({})'.format(os, arch_num, machine))
 
-        position = []
         for assets in json_response['assets']:
-            position.append(assets['name'])
-
-            if assets['name'].find('{}-{}'.format(os, arch)) != -1:
+            if assets['name'].find('{}-{}.zip'.format(os, arch)) != -1:
                 return [assets['name'], latest_version]
 
-        raise UnsupportedPlatform('{}-{} is not supported'.format(os, arch))
 
-
-def download_file(url, file_name=None):
-    base_name = os.path.basename(urlparse(url).path)
-
-    if file_name is None:
-        file_name = base_name
-
+def download_file(_url, _file_name=None):
+    base_name = os.path.basename(urlparse(_url).path)
+    file_name = _file_name if _file_name is not None else base_name
     temp_file_name = '{}.{}'.format(file_name, 'v2tmp')
 
     # delete temp file
-    if os.path.exists(temp_file_name):
-        os.remove(temp_file_name)
+    remove_if_exists(temp_file_name)
 
+    # record down start time
     start_time = time.time()
+
+    last_reported = 0
+    last_displayed = 0
 
     # print('Downloading: {}'.format(url))
     def __report_hook(block_num, block_size, total_size):
+        nonlocal last_displayed
+        nonlocal last_reported
+
         def __format_size(size):
             n = 0
             unit = {0: '', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
@@ -195,6 +199,30 @@ def download_file(url, file_name=None):
 
             return '{:6.2f} '.format(size) + unit[n] + 'B'
 
+        def __format_time(_time):
+            return str(datetime.timedelta(seconds=_time))
+
+        def __get_remain_tty_width(occupied):
+            _width = 0
+            if is_command_exists('stty'):
+                _width = int(execute_external_command('stty size').split()[1])
+
+            return _width - occupied if _width > occupied else 0
+
+        def __display_base_name(base_name):
+            name_len = len(base_name)
+            nonlocal last_displayed
+
+            if name_len > 25:
+                if name_len - last_displayed > 25:
+                    last_displayed += 1
+                    return base_name[last_displayed - 1: last_displayed + 24]
+                else:
+                    last_displayed = 0
+                    return base_name
+            else:
+                return base_name
+
         read_so_far = block_num * block_size
         if total_size > 0:
             duration = int(time.time() - start_time)
@@ -204,30 +232,38 @@ def download_file(url, file_name=None):
             percent = 100.00 if percent > 100.00 else percent
 
             # clear line if available
-            if is_command_exists('stty'):
-                width = int(execute_external_command('stty size').split()[1])
-                sys.stdout.write('\r{:>{width}}'.format('', width=width))
+            width = __get_remain_tty_width(97)
+            basic_format = '\rFetching: {:<25.25s} {:5.2f}% {:>15.15s} {:>15.15s}/s {:>15.15s} {:<3}{:>{width}}'
 
-            basic_format = '\rFetching: {:<25} {:5.2f}% {:>15} {:>15}/s {:>15s} {:<3}\n{}'
             if read_so_far < total_size:
-                sys.stdout.write(
-                    basic_format.format(base_name, percent, __format_size(total_size), __format_size(speed),
-                                        str(datetime.timedelta(seconds=estimate)), 'ETA', '\b')
-                )
+                # report rate 0.1s
+                if abs(time.time() - last_reported) > 0.1:
+                    last_reported = time.time()
+                    sys.stdout.write(
+                        basic_format.format(
+                            __display_base_name(base_name), percent,
+                            __format_size(total_size), __format_size(speed),
+                            __format_time(estimate), 'ETA', '', width=width)
+                    )
+                else:
+                    pass
             else:
                 # near the end
                 sys.stdout.write(
-                    basic_format.format(base_name, percent, __format_size(total_size), __format_size(speed),
-                                        str(datetime.timedelta(seconds=duration)), '', '')
+                    basic_format.format(
+                        base_name, percent, __format_size(total_size), __format_size(speed),
+                        __format_time(duration), '', '', width=width)
                 )
+
+                sys.stdout.write('\n')
         # total size is unknown
         else:
             # TODO format output
             sys.stdout.write("\r read {}".format(read_so_far))
 
-        sys.stdout.flush()
+            sys.stdout.flush()
 
-    urllib.request.urlretrieve(url, temp_file_name, __report_hook)
+    urllib.request.urlretrieve(_url, temp_file_name, __report_hook)
     os.rename(temp_file_name, file_name)
 
 
@@ -236,7 +272,7 @@ def extract_file(path, output):
         zip_ref.extractall(output)
 
     # remove zip file
-    os.remove(path)
+    remove_if_exists(path)
 
 
 def place_file(path_from):
@@ -249,13 +285,12 @@ def place_file(path_from):
             path_to = path
 
     # remove old file
-    if os.path.exists(path_to):
-        shutil.rmtree(path_to)
+    remove_if_exists(path_to)
 
     # move downloaded file to path_to
     shutil.move(path_from, path_to)
 
-    # remove executable permission
+    # change file and dir permission
     for root, dirs, files in os.walk(path_to):
         for dir in dirs:
             os.chmod(os.path.join(root, dir), 0o755)
@@ -367,22 +402,22 @@ def add_user(_user_ame=None):
 def download_and_place_v2ray(version, filename, msg):
     print('Currently installed version: {}, {}...'.format(get_v2ray_version(), msg))
 
-    download_file(get_download_url(version, filename), filename)
+    download_file('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename), filename)
     extract_file(filename, '.')
     return place_file(get_extracted_path(filename, version))
 
 
-def updater(filename, version, force=False):
+def upgrader(filename, version, force=False):
     if version != get_v2ray_version() or force:
         if force:
-            print('You already installed the latest version, force to update')
+            print('You already installed the latest version, forced to upgrade')
 
         # download and place file
-        download_and_place_v2ray(version, filename, 'updating')
+        download_and_place_v2ray(version, filename, 'upgrading')
 
         # restart v2ray
         v2ray_service('restart')
-        print('Successfully updated to v2ray-{}'.format(version))
+        print('Successfully upgraded to v2ray-{}'.format(version))
     else:
         print('You already installed the latest version')
 
@@ -432,12 +467,12 @@ def handler(signum, frame):
 
 
 def print_help():
-    print('Usage: {} [auto|install|update] [--force]'.format(os.path.basename(sys.argv[0])))
+    print('Usage: {} [auto|install|upgrade] [--force]'.format(os.path.basename(sys.argv[0])))
     exit(0)
 
 
 def parse_command_line_input():
-    available_mode = ['auto', 'install', 'update']
+    available_mode = ['auto', 'install', 'upgrade']
 
     argc = len(sys.argv)
     args = {'script_name': os.path.basename(sys.argv[0]), 'help': False, 'force': False, 'mode': 'auto'}
@@ -450,7 +485,6 @@ def parse_command_line_input():
                 args['mode'] = sys.argv[1]
             else:
                 args['help'] = True
-
         if argc > 2:
             if sys.argv[2] == '--force':
                 args['force'] = True
@@ -473,32 +507,32 @@ if __name__ == "__main__":
                 info = get_latest_version_from_api(*operating_system)
                 if args['mode'] == 'auto':
                     if install_status:
-                        updater(*info)
+                        upgrader(*info)
                     else:
                         installer(*info)
                 elif args['mode'] == 'install':
                     if install_status is False or args['force'] is True:
                         installer(*info)
                     else:
-                        sys.exit('v2ray is already install, use --force to reinstall.')
-                elif args['mode'] == 'update':
+                        sys.exit('v2ray is already installed, use --force to reinstall.')
+                elif args['mode'] == 'upgrade':
                     if install_status is False:
-                        sys.exit('v2ray must be installed before you can update it.')
+                        sys.exit('v2ray must be installed before you can upgrade it.')
                     else:
                         if args['force'] is True:
-                            updater(*info, force=True)
+                            upgrader(*info, force=True)
                         else:
-                            updater(*info)
+                            upgrader(*info)
             else:
                 # ask for root privileges
                 if is_command_exists('sudo'):
                     print('Re-lunching with root privileges...')
                     os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
                 elif is_command_exists('su'):
-                    print('You need root privileges to run this script, re-lunching...')
+                    print('Re-lunching with root privileges...')
                     os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
                 else:
-                    sys.exit('Sorry, cannot gain root privilege')
+                    sys.exit('Sorry, cannot gain root privilege.')
     except UnsupportedPlatform:
         sys.exit(
             'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())

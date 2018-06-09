@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import fileinput
+import hashlib
 import os
 import platform
 import random
@@ -18,6 +19,10 @@ from urllib.parse import urlparse
 
 
 class UnsupportedPlatform(Exception):
+    pass
+
+
+class ValidationError(Exception):
     pass
 
 
@@ -178,6 +183,25 @@ def get_latest_version_from_api(os, arch, arch_num, machine):
                 return [assets['name'], latest_version]
 
 
+def get_meta_data(version, _file_name):
+    url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
+    download_file(url, 'metadata.txt')
+
+    result = []
+    with open('metadata.txt', 'r+') as file:
+        for line in file:
+            split = line.split()
+            if len(split) == 2 and split[0] == 'File:':
+                if split[1] == _file_name:
+                    # return size and sha1
+                    result = [int(file.readline().split()[1]), file.readline().split()[1]]
+                    break
+
+    remove_if_exists('metadata.txt')
+
+    return result
+
+
 def download_file(_url, _file_name=None):
     base_name = os.path.basename(urlparse(_url).path)
     file_name = _file_name if _file_name is not None else base_name
@@ -205,10 +229,10 @@ def download_file(_url, _file_name=None):
                 size /= 1024
                 n += 1
 
-            return '{:6.2f} '.format(size) + unit[n] + 'B'
+            return '{:6.2f} {}B/s '.format(size, unit[n])
 
-        def __format_time(_time):
-            return str(datetime.timedelta(seconds=_time))
+        def __format_time(_time, _append=''):
+            return '{:.8}{}'.format(str(datetime.timedelta(seconds=_time)), _append)
 
         def __get_remain_tty_width(occupied):
             _width = 0
@@ -240,8 +264,8 @@ def download_file(_url, _file_name=None):
             percent = 100.00 if percent > 100.00 else percent
 
             # clear line if available
-            width = __get_remain_tty_width(97)
-            basic_format = '\rFetching: {:<25.25s} {:5.2f}% {:>15.15s} {:>15.15s}/s {:>15.15s} {:<3}{:>{width}}'
+            width = __get_remain_tty_width(96)
+            basic_format = '\rFetching: {:<25.25s} {:<15s} {:<15.15s} {:<15.15s} {}{:>{width}}'
 
             if read_so_far < total_size:
                 # report rate 0.1s
@@ -249,9 +273,9 @@ def download_file(_url, _file_name=None):
                     last_reported = time.time()
                     sys.stdout.write(
                         basic_format.format(
-                            __display_base_name(base_name), percent,
+                            __display_base_name(base_name), '{:8.2f}%'.format(percent),
                             __format_size(total_size), __format_size(speed),
-                            __format_time(estimate), 'ETA', '', width=width)
+                            __format_time(estimate, ' ETA'), '', width=width)
                     )
                 else:
                     pass
@@ -259,8 +283,8 @@ def download_file(_url, _file_name=None):
                 # near the end
                 sys.stdout.write(
                     basic_format.format(
-                        base_name, percent, __format_size(total_size), __format_size(speed),
-                        __format_time(duration), '', '', width=width)
+                        base_name, '{:8.2f}%'.format(percent), __format_size(total_size), __format_size(speed),
+                        __format_time(duration), '', width=width)
                 )
 
                 sys.stdout.write('\n')
@@ -278,9 +302,6 @@ def download_file(_url, _file_name=None):
 def extract_file(path, output):
     with zipfile.ZipFile(path, 'r') as zip_ref:
         zip_ref.extractall(output)
-
-    # remove zip file
-    remove_if_exists(path)
 
 
 def place_file(path_from):
@@ -407,11 +428,45 @@ def add_user(_user_ame=None):
     closure_try(_try_user, KeyError, _try_add_user)
 
 
+def sha1_file(file_name):
+    sha1sum = hashlib.sha1()
+    with open(file_name, 'rb') as source:
+        block = source.read(2 ** 16)
+        while len(block) != 0:
+            sha1sum.update(block)
+            block = source.read(2 ** 16)
+
+    return sha1sum.hexdigest()
+
+
+def validate_download(filename, meta_data):
+    if len(meta_data) != 0:
+        # validate size
+        file_size = os.path.getsize(filename)
+        sha1 = sha1_file(filename)
+
+        if meta_data[0] != file_size:
+            raise ValidationError('Assertion failed.\n  Expect Size {}, got {}.'.format(meta_data[0], file_size))
+
+        if meta_data[1] != sha1:
+            raise ValidationError('Assertion failed.\n  Expect SHA1 {}, got {}.'.format(meta_data[1], sha1))
+
+        print('File {} has passed the validation.'.format(filename))
+    else:
+        print('Failed to perform validation, invalid meta data')
+
+
 def download_and_place_v2ray(version, filename, msg):
     print('Currently installed version: {}, {}...'.format(get_v2ray_version(), msg))
 
+    meta_data = get_meta_data(version, filename)
     download_file('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename), filename)
+    validate_download(filename, meta_data)
     extract_file(filename, '.')
+
+    # remove zip file
+    remove_if_exists(filename)
+
     return place_file(get_extracted_path(filename, version))
 
 
@@ -573,3 +628,5 @@ if __name__ == "__main__":
         sys.exit(
             'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
         )
+    except ValidationError as e:
+        sys.exit(str(e))

@@ -21,7 +21,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | OpenSUSE      | Tumbleweed     | X86/AMD64    | :heavy_check_mark:       | 2018.05.30           |
 | FreeBSD       | 11.1           | AMD64        | :heavy_check_mark:       |                      |
 | FreeBSD       | 10.4           | AMD64        | :heavy_check_mark:       |                      |
-| OpenDSD       | 6.2            | AMD64        | :x:                      |                      |
+| OpenDSD       | 6.2            | AMD64        | :heavy_exclamation_mark: | Partially supported  |
 | MacOS         | 10.13.5        | AMD64        | :heavy_check_mark:       | Via Homebrew         |
 | Windows       | -              | X86/AMD64    | :x:                      |                      |
 

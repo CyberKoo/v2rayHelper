@@ -15,7 +15,6 @@ import time
 import urllib.request
 import uuid
 import zipfile
-from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -71,6 +70,15 @@ def mkdir(_path, _perm=0o755):
 def mkdir_chown(_path, _perm=0o755, _user=None, _group=None):
     mkdir(_path, _perm)
     chown(_path, _user, _group)
+
+
+def is_file_contains(file_name, data):
+    with open(file_name) as file:
+        for line in file:
+            if line.find(data) is not -1:
+                return True
+
+    return False
 
 
 def replace_content_in_file(_filename, _replace_pair):
@@ -154,7 +162,9 @@ def v2ray_service(command):
     if is_systemd():
         execute_external_command('systemctl {} v2ray'.format(command))
     else:
-        execute_external_command('service v2ray {}'.format(command))
+        # TODO openbsd
+        if not os_is('openbsd'):
+            execute_external_command('service v2ray {}'.format(command))
 
 
 def get_os_info():
@@ -239,7 +249,7 @@ def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
         nonlocal last_displayed
         nonlocal last_reported
 
-        def __format_size(size):
+        def __format_size(size, is_speed=False):
             n = 0
             unit = {0: '', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
 
@@ -247,7 +257,7 @@ def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
                 size /= 1024
                 n += 1
 
-            return '{:6.2f} {}B/s '.format(size, unit[n])
+            return '{:6.2f} {}B{} '.format(size, unit[n], '/s' if is_speed else '')
 
         def __format_time(_time, _append=''):
             return '{:.8}{}'.format(str(datetime.timedelta(seconds=_time)), _append)
@@ -292,7 +302,7 @@ def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
                     sys.stdout.write(
                         basic_format.format(
                             __display_base_name(base_name), '{:8.2f}%'.format(percent),
-                            __format_size(total_size), __format_size(speed),
+                            __format_size(total_size), __format_size(speed, True),
                             __format_time(estimate, ' ETA'), '', width=width)
                     )
                 else:
@@ -301,7 +311,7 @@ def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
                 # near the end
                 sys.stdout.write(
                     basic_format.format(
-                        base_name, '{:8.2f}%'.format(percent), __format_size(total_size), __format_size(speed),
+                        base_name, '{:8.2f}%'.format(percent), __format_size(total_size), __format_size(speed, True),
                         __format_time(duration), '', width=width)
                 )
 
@@ -368,19 +378,24 @@ def install_start_script():
         else:
             # todo add support for legacy init scripts
             pass
-    elif os_is_bsd():
+    elif os_is('freebsd'):
         download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.freebsd', 'v2ray')
+        path = '/usr/local/etc/rc.d/v2ray'
 
-        shutil.move('/tmp/v2rayHelper/v2ray', '/usr/local/etc/rc.d/v2ray')
-        os.chmod('/usr/local/etc/rc.d/v2ray', 0o555)
+        shutil.move('/tmp/v2rayHelper/v2ray', path)
+        os.chmod(path, 0o555)
 
         # create folder for pid file
         mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
+    elif os_is('openbsd'):
+        pass
 
 
 def enable_auto_start():
-    if os_is_bsd():
-        with open('/etc/rc.conf', 'a+') as file:
+    rc_file_path = '/etc/rc.conf'
+
+    if os_is_bsd() and not is_file_contains(rc_file_path, 'v2ray_enable'):
+        with open(rc_file_path, 'a+') as file:
             file.write('\nv2ray_enable="YES"')
     elif os_is('linux'):
         if is_systemd():
@@ -390,9 +405,9 @@ def enable_auto_start():
 def install_default_config_file():
     conf_dir = None
 
-    if os_is('linux'):
+    if os_is(['linux', 'openbsd']):
         conf_dir = '/etc/v2ray'
-    elif os_is_bsd():
+    elif os_is('freebsd'):
         conf_dir = '/usr/local/etc/v2ray'
 
     if conf_dir is not None:

@@ -7,6 +7,7 @@ import platform
 import random
 import shutil
 import signal
+import socket
 import subprocess
 import json
 import sys
@@ -24,6 +25,20 @@ class UnsupportedPlatform(Exception):
 
 class ValidationError(Exception):
     pass
+
+
+def get_ip():
+    # from https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
 
 
 def execute_external_command(_command):
@@ -63,7 +78,7 @@ def replace_content_in_file(_filename, _replace_pair):
         for line in file:
             for replace in _replace_pair:
                 line = line.replace(replace[0], replace[1])
-            print(line)
+            print(line, end='')
 
 
 def closure_try(__try, __except, __on_except):
@@ -188,7 +203,7 @@ def get_meta_data(version, _file_name):
     download_file(url, 'metadata.txt')
 
     result = []
-    with open('metadata.txt', 'r+') as file:
+    with open('/tmp/v2rayHelper/metadata.txt', 'r+') as file:
         for line in file:
             split = line.split()
             if len(split) == 2 and split[0] == 'File:':
@@ -197,26 +212,29 @@ def get_meta_data(version, _file_name):
                     result = [int(file.readline().split()[1]), file.readline().split()[1]]
                     break
 
-    remove_if_exists('metadata.txt')
+    remove_if_exists('/tmp/v2rayHelper/metadata.txt')
 
     return result
 
 
-def download_file(_url, _file_name=None):
+def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
     base_name = os.path.basename(urlparse(_url).path)
     file_name = _file_name if _file_name is not None else base_name
-    temp_file_name = '{}.{}'.format(file_name, 'v2tmp')
+
+    # full path
+    full_path = '{}/{}'.format(dir, file_name)
+    temp_full_path = '{}.{}'.format(full_path, 'v2tmp')
 
     # delete temp file
-    remove_if_exists(temp_file_name)
+    remove_if_exists(temp_full_path)
+
+    # variable for report hook
+    last_reported = 0
+    last_displayed = 0
 
     # record down start time
     start_time = time.time()
 
-    last_reported = 0
-    last_displayed = 0
-
-    # print('Downloading: {}'.format(url))
     def __report_hook(block_num, block_size, total_size):
         nonlocal last_displayed
         nonlocal last_reported
@@ -295,8 +313,8 @@ def download_file(_url, _file_name=None):
 
             sys.stdout.flush()
 
-    urllib.request.urlretrieve(_url, temp_file_name, __report_hook)
-    os.rename(temp_file_name, file_name)
+    urllib.request.urlretrieve(_url, temp_full_path, __report_hook)
+    os.rename(temp_full_path, full_path)
 
 
 def extract_file(path, output):
@@ -346,14 +364,14 @@ def install_start_script():
             download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.service',
                           'v2ray.service')
 
-            shutil.move('./v2ray.service', '/etc/systemd/system/v2ray.service')
+            shutil.move('/tmp/v2rayHelper/v2ray.service', '/etc/systemd/system/v2ray.service')
         else:
             # todo add support for legacy init scripts
             pass
     elif os_is_bsd():
         download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.freebsd', 'v2ray')
 
-        shutil.move('./v2ray', '/usr/local/etc/rc.d/v2ray')
+        shutil.move('/tmp/v2rayHelper/v2ray', '/usr/local/etc/rc.d/v2ray')
         os.chmod('/usr/local/etc/rc.d/v2ray', 0o555)
 
         # create folder for pid file
@@ -380,20 +398,25 @@ def install_default_config_file():
     if conf_dir is not None:
         # create default configuration file path
         mkdir(conf_dir, 0o755)
+        config_file = '{}/config.json'.format(conf_dir)
 
-        # download config file
-        download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/config.json',
-                      'config.json')
-        shutil.move('config.json', '{}/config.json'.format(conf_dir))
+        if not os.path.exists(config_file):
+            # download config file
+            download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/config.json',
+                          'config.json')
+            shutil.move('/tmp/v2rayHelper/config.json', config_file)
 
-        # replace default value with randomly generated one
-        replace = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
-        replace_content_in_file('{}/config.json'.format(conf_dir), [
-            ['dbe16381-f905-4b88-946f-dfc21ed9be29', replace[0]],
-            ['12345', replace[1]]
-        ])
+            # replace default value with randomly generated one
+            replace = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
+            replace_content_in_file('{}/config.json'.format(conf_dir), [
+                ['dbe16381-f905-4b88-946f-dfc21ed9be29', replace[0]],
+                # ['0.0.0.0', str(get_ip())],
+                ['12345', replace[1]]
+            ])
 
-        return replace
+            return replace
+        else:
+            print('{} is already exists, skip installing config.json'.format(config_file))
 
     return None
 
@@ -451,7 +474,7 @@ def validate_download(filename, meta_data):
         if meta_data[1] != sha1:
             raise ValidationError('Assertion failed.\n  Expect SHA1 {}, got {}.'.format(meta_data[1], sha1))
 
-        print('File {} has passed the validation.'.format(filename))
+        print('File {} has passed the validation.'.format(os.path.basename(filename)))
     else:
         print('Failed to perform validation, invalid meta data')
 
@@ -460,17 +483,21 @@ def download_and_place_v2ray(version, filename, msg):
     print('Currently installed version: {}, {}...'.format(get_v2ray_version(), msg))
 
     meta_data = get_meta_data(version, filename)
+    full_path = '/tmp/v2rayHelper/{}'.format(filename
+                                             )
     download_file('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename), filename)
-    validate_download(filename, meta_data)
-    extract_file(filename, '.')
+    validate_download(full_path, meta_data)
+    extract_file(full_path, '/tmp/v2rayHelper/')
 
     # remove zip file
-    remove_if_exists(filename)
+    remove_if_exists(full_path)
 
-    return place_file(get_extracted_path(filename, version))
+    return place_file(get_extracted_path(full_path, version))
 
 
 def upgrader(filename, version, force=False):
+    __init()
+
     if version != get_v2ray_version() or force:
         if force:
             print('You already installed the latest version, forced to upgrade')
@@ -484,8 +511,13 @@ def upgrader(filename, version, force=False):
     else:
         print('You already installed the latest version')
 
+    __cleanup()
+
 
 def installer(filename, version):
+    __init()
+
+    # download and install
     installed_path = download_and_place_v2ray(version, filename, 'installing')
 
     # create soft link, for linux /usr/bin, bsd /usr/local/bin
@@ -517,9 +549,14 @@ def installer(filename, version):
 
     # print message
     print('Successfully installed v2ray-{}'.format(info[1]))
-    print()
-    print('v2ray is now bind on 0.0.0.0:{}'.format(conf[1]))
-    print('uuid: {}'.format(conf[0]))
+
+    if conf is not None:
+        print()
+        print('v2ray is now bind on {}:{}'.format(get_ip(), conf[1]))
+        print('uuid: {}'.format(conf[0]))
+        print('alterId: {}'.format(64))
+
+    __cleanup()
 
 
 def mac_install(force):
@@ -549,8 +586,7 @@ def mac_install(force):
 
 def handler(signum, frame):
     print('\nKeyboard interrupt!!! Clean-up')
-    for file in Path('.').glob('*.v2tmp'):
-        file.unlink()
+    remove_if_exists('/tmp/v2rayHelper')
     exit(1)
 
 
@@ -578,6 +614,17 @@ def parse_command_line_input():
                 args['force'] = True
 
     return args
+
+
+def __init():
+    # clean-up and create temp folder
+    remove_if_exists('/tmp/v2rayHelper')
+    mkdir('/tmp/v2rayHelper', 0o644)
+
+
+def __cleanup():
+    # delede temp folder
+    remove_if_exists('/tmp/v2rayHelper')
 
 
 if __name__ == "__main__":
@@ -624,6 +671,9 @@ if __name__ == "__main__":
                         sys.exit('Sorry, cannot gain root privilege.')
             elif os_is_mac():
                 mac_install(args['force'])
+
+            # delete temp folder
+            remove_if_exists('/tmp/v2rayHelper')
     except UnsupportedPlatform:
         sys.exit(
             'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())

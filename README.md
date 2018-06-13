@@ -10,7 +10,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | :-----------: |:-------------: | :----------: | :----------------------: | :------------------: |
 | CentOS        | 7.5            | AMD64        | :heavy_check_mark:       |                      |
 | CentOS        | 6.x            | X86/AMD64    | :heavy_exclamation_mark: | SysV                 |
-| Ubuntu        | 18.04 LTS      | AMD64        | :heavy_check_mark:       |                      |
+| Ubuntu        | 18.04 LTS      | AMD64/ARM32  | :heavy_check_mark:       |                      |
 | Ubuntu        | 17.10          | X86/AMD64    | :heavy_check_mark:       |                      |
 | Ubuntu        | 16.04 TLS      | X86/AMD64    | :heavy_check_mark:       |                      |
 | Ubuntu        | 14.04 LTS      | X86/AMD64    | :heavy_exclamation_mark: | Upstart              |

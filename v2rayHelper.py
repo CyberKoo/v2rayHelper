@@ -18,26 +18,53 @@ import zipfile
 from urllib.parse import urlparse
 
 
-class UnsupportedPlatform(Exception):
+class V2rayHelperException(Exception):
     pass
 
 
-class ValidationError(Exception):
+class UnsupportedPlatformException(V2rayHelperException):
     pass
+
+
+class ValidationException(V2rayHelperException):
+    pass
+
+
+class InstallingException(V2rayHelperException):
+    pass
+
+
+class UpgradingException(V2rayHelperException):
+    pass
+
+
+class UninstallingException(V2rayHelperException):
+    pass
+
+
+class PrivilegeException(V2rayHelperException):
+    pass
+
+
+class LatestVersionInstalledException(V2rayHelperException):
+    pass
+
+
+def get_github_file_url(path):
+    return 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/{}'.format(path)
 
 
 def get_ip():
     # from https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            # doesn't even have to be reachable
+            s.connect(('10.255.255.255', 1))
+            ip_address = s.getsockname()[0]
+        except:
+            ip_address = '127.0.0.1'
+
+    return ip_address
 
 
 def execute_external_command(_command):
@@ -117,6 +144,18 @@ def which_command_exists(_commands):
         raise TypeError
 
 
+def is_v2ray_installed(installed_raise_error=None, not_installed_raise_error=None):
+    install_status = is_command_exists('v2ray')
+
+    if install_status and installed_raise_error is not None:
+        raise installed_raise_error
+
+    if not install_status and not_installed_raise_error is not None:
+        raise not_installed_raise_error
+
+    return install_status
+
+
 def is_collection(_arg):
     return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
 
@@ -189,7 +228,9 @@ def get_os_info():
 
         return [system.lower(), arch, platform.architecture()[0], machine]
 
-    raise UnsupportedPlatform
+    raise UnsupportedPlatformException(
+        'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
+    )
 
 
 def get_latest_version_from_api(os, arch, arch_num, machine):
@@ -210,10 +251,11 @@ def get_latest_version_from_api(os, arch, arch_num, machine):
 
 def get_meta_data(version, _file_name):
     url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
+    full_path = '/tmp/v2rayHelper/metadata.txt'
     download_file(url, 'metadata.txt')
 
     result = []
-    with open('/tmp/v2rayHelper/metadata.txt', 'r+') as file:
+    with open(full_path, 'r+') as file:
         for line in file:
             split = line.split()
             if len(split) == 2 and split[0] == 'File:':
@@ -222,7 +264,7 @@ def get_meta_data(version, _file_name):
                     result = [int(file.readline().split()[1]), file.readline().split()[1]]
                     break
 
-    remove_if_exists('/tmp/v2rayHelper/metadata.txt')
+    remove_if_exists(full_path)
 
     return result
 
@@ -371,15 +413,14 @@ def install_start_script():
     if os_is('linux'):
         # create systemd file or rc.d
         if is_systemd():
-            download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.service',
-                          'v2ray.service')
+            download_file(get_github_file_url('misc/v2ray.service'), 'v2ray.service')
 
             shutil.move('/tmp/v2rayHelper/v2ray.service', '/etc/systemd/system/v2ray.service')
         else:
             # todo add support for legacy init scripts
             pass
     elif os_is('freebsd'):
-        download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/v2ray.freebsd', 'v2ray')
+        download_file(get_github_file_url('misc/v2ray.freebsd'), 'v2ray')
         path = '/usr/local/etc/rc.d/v2ray'
 
         shutil.move('/tmp/v2rayHelper/v2ray', path)
@@ -402,13 +443,35 @@ def enable_auto_start():
             v2ray_service('enable')
 
 
-def install_default_config_file():
+def disable_auto_start():
+    rc_file_path = '/etc/rc.conf'
+
+    if os_is_bsd() and is_file_contains(rc_file_path, 'v2ray_enable'):
+        with open(rc_file_path, 'r+') as file:
+            new_f = file.readlines()
+            file.seek(0)
+            for line in new_f:
+                if 'v2ray_enable' not in line:
+                    file.write(line)
+            file.truncate()
+    elif os_is('linux'):
+        if is_systemd():
+            v2ray_service('disable')
+
+
+def get_configuration_dir():
     conf_dir = None
 
     if os_is(['linux', 'openbsd']):
         conf_dir = '/etc/v2ray'
     elif os_is('freebsd'):
         conf_dir = '/usr/local/etc/v2ray'
+
+    return conf_dir
+
+
+def install_default_config_file():
+    conf_dir = get_configuration_dir()
 
     if conf_dir is not None:
         # create default configuration file path
@@ -417,8 +480,7 @@ def install_default_config_file():
 
         if not os.path.exists(config_file):
             # download config file
-            download_file('https://raw.githubusercontent.com/waf7225/v2rayHelper/master/misc/config.json',
-                          'config.json')
+            download_file(get_github_file_url('misc/config.json'), 'config.json')
             shutil.move('/tmp/v2rayHelper/config.json', config_file)
 
             # replace default value with randomly generated one
@@ -452,9 +514,8 @@ def add_user(_user_ame=None):
         execute_external_command('{}groupadd {}'.format(prefix, name))
 
     def _try_add_user():
-        # delete if exists
-        if os.path.exists('/var/lib/{}'.format(name)):
-            shutil.rmtree('/var/lib/{}'.format(name))
+        # delete the home folder
+        remove_if_exists('/var/lib/{}'.format(name))
 
         create_user = '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'.format(prefix, name)
         execute_external_command(create_user)
@@ -464,6 +525,33 @@ def add_user(_user_ame=None):
 
     # add user
     closure_try(_try_user, KeyError, _try_add_user)
+
+
+def delete_user(_user_ame=None):
+    name = _user_ame if _user_ame is not None else 'v2ray'
+    prefix = 'pw ' if os_is('freebsd') else ''
+
+    def _try_delete_user():
+        import pwd
+        pwd.getpwnam(name)
+        execute_external_command('{0}userdel {1}'.format(prefix, name))
+
+        # delete if exists
+        remove_if_exists('/var/lib/{}'.format(name))
+
+    def _try_delete_group():
+        import grp
+        grp.getgrnam(name)
+        execute_external_command('{}groupdel {}'.format(prefix, name))
+
+    def _do_nothing():
+        pass
+
+    # delete user
+    closure_try(_try_delete_user, KeyError, _do_nothing)
+
+    # delete group
+    closure_try(_try_delete_group, KeyError, _do_nothing)
 
 
 def sha1_file(file_name):
@@ -484,14 +572,14 @@ def validate_download(filename, meta_data):
         sha1 = sha1_file(filename)
 
         if meta_data[0] != file_size:
-            raise ValidationError('Assertion failed.\n  Expect Size {}, got {}.'.format(meta_data[0], file_size))
+            raise ValidationException('Assertion failed.\n  Expect Size {}, got {}.'.format(meta_data[0], file_size))
 
         if meta_data[1] != sha1:
-            raise ValidationError('Assertion failed.\n  Expect SHA1 {}, got {}.'.format(meta_data[1], sha1))
+            raise ValidationException('Assertion failed.\n  Expect SHA1 {}, got {}.'.format(meta_data[1], sha1))
 
         print('File {} has passed the validation.'.format(os.path.basename(filename)))
     else:
-        print('Failed to perform validation, invalid meta data')
+        raise ValidationException('Failed to perform validation, invalid meta data')
 
 
 def download_and_place_v2ray(version, filename, msg):
@@ -513,6 +601,10 @@ def download_and_place_v2ray(version, filename, msg):
 def upgrader(filename, version, force=False):
     __init()
 
+    is_v2ray_installed(
+        not_installed_raise_error=UpgradingException('v2ray must be installed before you can upgrade it.')
+    )
+
     if version != get_v2ray_version() or force:
         if force:
             print('You already installed the latest version, forced to upgrade')
@@ -529,8 +621,13 @@ def upgrader(filename, version, force=False):
     __cleanup()
 
 
-def installer(filename, version):
+def installer(filename, version, force=False):
     __init()
+
+    if force is False:
+        is_v2ray_installed(
+            installed_raise_error=InstallingException('v2ray is already installed, use --force to reinstall.')
+        )
 
     # download and install
     installed_path = download_and_place_v2ray(version, filename, 'installing')
@@ -574,11 +671,18 @@ def installer(filename, version):
     __cleanup()
 
 
+def command_auto_processor(name, version):
+    if is_v2ray_installed():
+        upgrader(name, version)
+    else:
+        installer(name, version)
+
+
 def mac_install(force):
     # check if brew is installed
     if is_command_exists('brew'):
         # already installed
-        if not is_command_exists('v2ray') or force:
+        if not is_v2ray_installed() or force:
             # Install the official tap
             print('Install the official tap...')
             execute_external_command('brew tap v2ray/v2ray')
@@ -599,19 +703,104 @@ def mac_install(force):
         sys.exit('This script requires Homebrew')
 
 
+# https://stackoverflow.com/questions/3041986/apt-command-line-interface-like-yes-no-input
+def query_yes_no(question, default='no'):
+    """Ask a yes/no question via raw_input() and return their answer.
+
+    "question" is a string that is presented to the user.
+    "default" is the presumed answer if the user just hits <Enter>.
+        It must be "yes" (the default), "no" or None (meaning
+        an answer is required of the user).
+
+    The "answer" return value is True for "yes" or False for "no".
+    """
+    valid = {"yes": True, "y": True, "ye": True,
+             "no": False, "n": False}
+    if default is None:
+        prompt = ' [y/n] '
+    elif default == 'yes':
+        prompt = " [Y/n] "
+    elif default == 'no':
+        prompt = " [y/N] "
+    else:
+        raise ValueError("invalid default answer: '%s'" % default)
+
+    while True:
+        sys.stdout.write(question + prompt)
+        choice = input().lower()
+        if default is not None and choice == '':
+            return valid[default]
+        elif choice in valid:
+            return valid[choice]
+        else:
+            sys.stdout.write("Please respond with 'yes' or 'no' "
+                             "(or 'y' or 'n').\n")
+
+
+def uninstall(bypass_check=False):
+    if bypass_check or is_v2ray_installed(not_installed_raise_error=UninstallingException(
+            'V2ray is not installed, you cannot uninstall it.')):
+        print('Uninstalling...')
+        # remove symbol links
+        print('Deleting symbol links')
+        for name in ['v2ray', 'v2ctl']:
+            path = shutil.which(name)
+            if path is not None:
+                remove_if_exists(path)
+
+        # remove the real installed folder
+        print('Deleting v2ray directory')
+        remove_if_exists('/opt/v2ray/')
+        remove_if_exists('/usr/local/v2ray/')
+
+        # stop v2ray process
+        try:
+            print('Stop v2ray process')
+            v2ray_service('stop')
+
+            print('Disable auto start')
+            disable_auto_start()
+        except subprocess.CalledProcessError:
+            sys.stderr.write('v2ray service file is not found!!!')
+
+
+def purge():
+    if query_yes_no('Do you really want to remove the configuration file?'):
+        # uninstall first
+        uninstall(True)
+
+        # delete configuration
+        print('Deleting configuration file')
+        conf_dir = get_configuration_dir()
+        if conf_dir is not None:
+            remove_if_exists(conf_dir)
+
+        # delete user/group
+        print('Deleting User/Group v2ray')
+        delete_user('v2ray')
+
+        # delete all other file/folders
+        print('Deleting all other files')
+        remove_if_exists('/etc/systemd/system/v2ray.service')
+        remove_if_exists('/usr/local/etc/rc.d/v2ray')
+        remove_if_exists('/var/run/v2ray/')
+    else:
+        print('Action cancelled.')
+
+
 def handler(signum, frame):
     print('\nKeyboard interrupt!!! Clean-up')
-    remove_if_exists('/tmp/v2rayHelper')
+    __cleanup()
     exit(1)
 
 
 def print_help():
-    print('Usage: {} [auto|install|upgrade] [--force]'.format(os.path.basename(sys.argv[0])))
+    print('Usage: {} [auto|install|upgrade|uninstall|purge] [--force]'.format(os.path.basename(sys.argv[0])))
     exit(0)
 
 
 def parse_command_line_input():
-    available_mode = ['auto', 'install', 'upgrade']
+    available_mode = ['auto', 'install', 'upgrade', 'uninstall', 'purge']
 
     argc = len(sys.argv)
     args = {'script_name': os.path.basename(sys.argv[0]), 'help': False, 'force': False, 'mode': 'auto'}
@@ -638,14 +827,13 @@ def __init():
 
 
 def __cleanup():
-    # delede temp folder
+    # delete temp folder
     remove_if_exists('/tmp/v2rayHelper')
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, handler)
     args = parse_command_line_input()
-    install_status = is_command_exists('v2ray')
 
     if args['help']:
         print_help()
@@ -657,23 +845,15 @@ if __name__ == "__main__":
                 if os.getuid() == 0:
                     info = get_latest_version_from_api(*operating_system)
                     if args['mode'] == 'auto':
-                        if install_status:
-                            upgrader(*info)
-                        else:
-                            installer(*info)
+                        command_auto_processor(*info)
                     elif args['mode'] == 'install':
-                        if install_status is False or args['force'] is True:
-                            installer(*info)
-                        else:
-                            sys.exit('v2ray is already installed, use --force to reinstall.')
+                        installer(*info, force=args['force'])
                     elif args['mode'] == 'upgrade':
-                        if install_status is False:
-                            sys.exit('v2ray must be installed before you can upgrade it.')
-                        else:
-                            if args['force'] is True:
-                                upgrader(*info, force=True)
-                            else:
-                                upgrader(*info)
+                        upgrader(*info, force=args['force'])
+                    elif args['mode'] == 'uninstall':
+                        uninstall()
+                    elif args['mode'] == 'purge':
+                        purge()
                 else:
                     # ask for root privileges
                     if is_command_exists('sudo'):
@@ -683,15 +863,12 @@ if __name__ == "__main__":
                         print('Re-lunching with root privileges...')
                         os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
                     else:
-                        sys.exit('Sorry, cannot gain root privilege.')
+                        raise PrivilegeException('Sorry, cannot gain root privilege.')
             elif os_is_mac():
                 mac_install(args['force'])
 
             # delete temp folder
             remove_if_exists('/tmp/v2rayHelper')
-    except UnsupportedPlatform:
-        sys.exit(
-            'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
-        )
-    except ValidationError as e:
+    # V2rayHelperException handling
+    except V2rayHelperException as e:
         sys.exit(str(e))

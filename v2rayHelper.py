@@ -215,17 +215,24 @@ def get_os_info():
         'arch': ['X86_64', 'I386'],
         'arm': {
             'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
-            'arm64': ['armv8']
+            'arm64': ['aarch64']
         }
     }
 
+    # check architecture
+    valid_architecture = False
     if os_is_supported():
         if machine not in supported['arch']:
             for key in supported['arm']:
                 if machine in supported['arm'][key]:
                     arch = key
+                    valid_architecture = True
                     break
+        else:
+            valid_architecture = True
 
+
+    if valid_architecture:
         return [system.lower(), arch, platform.architecture()[0], machine]
 
     raise UnsupportedPlatformException(
@@ -586,8 +593,7 @@ def download_and_place_v2ray(version, filename, msg):
     print('Currently installed version: {}, {}...'.format(get_v2ray_version(), msg))
 
     meta_data = get_meta_data(version, filename)
-    full_path = '/tmp/v2rayHelper/{}'.format(filename
-                                             )
+    full_path = '/tmp/v2rayHelper/{}'.format(filename)
     download_file('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename), filename)
     validate_download(full_path, meta_data)
     extract_file(full_path, '/tmp/v2rayHelper/')

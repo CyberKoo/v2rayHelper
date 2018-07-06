@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import argparse
+import atexit
 import datetime
 import fileinput
 import hashlib
@@ -48,6 +50,22 @@ class PrivilegeException(V2rayHelperException):
 
 class LatestVersionInstalledException(V2rayHelperException):
     pass
+
+
+# http://code.activestate.com/recipes/410666-signal-handler-decorator/
+def signal_handler(signal_number):
+    """
+    A decorator to set the specified function as handler for a signal.
+    This function is the 'outer' decorator, called with only the (non-function)
+    arguments
+    """
+
+    # create the 'real' decorator which takes only a function as an argument
+    def __decorator(__function):
+        signal.signal(signal_number, __function)
+        return __function
+
+    return __decorator
 
 
 def get_github_file_url(path):
@@ -212,7 +230,7 @@ def get_os_info():
     machine = platform.machine()
 
     supported = {
-        'arch': ['X86_64', 'I386'],
+        'pc': ['X86_64', 'I386'],
         'arm': {
             'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
             'arm64': ['aarch64']
@@ -222,7 +240,8 @@ def get_os_info():
     # check architecture
     valid_architecture = False
     if os_is_supported():
-        if machine not in supported['arch']:
+        # make it to upper case to maintain the compatibility across all platforms
+        if machine.upper() not in supported['pc']:
             for key in supported['arm']:
                 if machine in supported['arm'][key]:
                     arch = key
@@ -230,7 +249,6 @@ def get_os_info():
                     break
         else:
             valid_architecture = True
-
 
     if valid_architecture:
         return [system.lower(), arch, platform.architecture()[0], machine]
@@ -624,8 +642,6 @@ def upgrader(filename, version, force=False):
     else:
         print('You already installed the latest version')
 
-    __cleanup()
-
 
 def installer(filename, version, force=False):
     __init()
@@ -673,8 +689,6 @@ def installer(filename, version, force=False):
         print('v2ray is now bind on {}:{}'.format(get_ip(), conf[1]))
         print('uuid: {}'.format(conf[0]))
         print('alterId: {}'.format(64))
-
-    __cleanup()
 
 
 def command_auto_processor(name, version):
@@ -794,36 +808,17 @@ def purge():
         print('Action cancelled.')
 
 
-def handler(signum, frame):
-    print('\nKeyboard interrupt!!! Clean-up')
-    __cleanup()
-    exit(1)
-
-
-def print_help():
-    print('Usage: {} [auto|install|upgrade|uninstall|purge] [--force]'.format(os.path.basename(sys.argv[0])))
-    exit(0)
-
-
 def parse_command_line_input():
-    available_mode = ['auto', 'install', 'upgrade', 'uninstall', 'purge']
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-a', '--auto', action='store_true', default=True, help='automatic mode')
+    group.add_argument('-i', '--install', action='store_true', help='install v2ray')
+    group.add_argument('-u', '--upgrade', action='store_true', help='upgrade v2ray')
+    group.add_argument('-r', '--remove', action='store_true', help='remove v2ray')
+    group.add_argument('-p', '--purge', action='store_true', help='remove v2ray and configure file')
+    parser.add_argument('-f', '--force', action='store_true', help='force to do the selected action')
 
-    argc = len(sys.argv)
-    args = {'script_name': os.path.basename(sys.argv[0]), 'help': False, 'force': False, 'mode': 'auto'}
-
-    if argc > 1:
-        if sys.argv[1] == '--help':
-            args['help'] = True
-        else:
-            if sys.argv[1] in available_mode:
-                args['mode'] = sys.argv[1]
-            else:
-                args['help'] = True
-        if argc > 2:
-            if sys.argv[2] == '--force':
-                args['force'] = True
-
-    return args
+    return parser.parse_args()
 
 
 def __init():
@@ -832,17 +827,21 @@ def __init():
     mkdir('/tmp/v2rayHelper', 0o644)
 
 
+@signal_handler(signal.SIGINT)
+def __handler(signum, frame):
+    print('\nQuitting...')
+    exit(signum)
+
+
+@atexit.register
 def __cleanup():
     # delete temp folder
     remove_if_exists('/tmp/v2rayHelper')
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, handler)
     args = parse_command_line_input()
 
-    if args['help']:
-        print_help()
     try:
         operating_system = get_os_info()
 
@@ -850,31 +849,27 @@ if __name__ == "__main__":
             if os_is_nix():
                 if os.getuid() == 0:
                     info = get_latest_version_from_api(*operating_system)
-                    if args['mode'] == 'auto':
-                        command_auto_processor(*info)
-                    elif args['mode'] == 'install':
-                        installer(*info, force=args['force'])
-                    elif args['mode'] == 'upgrade':
-                        upgrader(*info, force=args['force'])
-                    elif args['mode'] == 'uninstall':
+                    if args.install:
+                        installer(*info, force=args.force)
+                    elif args.upgrade:
+                        upgrader(*info, force=args.force)
+                    elif args.remove:
                         uninstall()
-                    elif args['mode'] == 'purge':
+                    elif args.purge:
                         purge()
+                    elif args.auto:
+                        command_auto_processor(*info)
                 else:
                     # ask for root privileges
+                    print('Re-lunching with root privileges...')
                     if is_command_exists('sudo'):
-                        print('Re-lunching with root privileges...')
                         os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
                     elif is_command_exists('su'):
-                        print('Re-lunching with root privileges...')
                         os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
                     else:
                         raise PrivilegeException('Sorry, cannot gain root privilege.')
             elif os_is_mac():
-                mac_install(args['force'])
-
-            # delete temp folder
-            remove_if_exists('/tmp/v2rayHelper')
+                mac_install(args.force)
     # V2rayHelperException handling
     except V2rayHelperException as e:
         sys.exit(str(e))

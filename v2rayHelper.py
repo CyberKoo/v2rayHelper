@@ -4,6 +4,7 @@ import atexit
 import datetime
 import fileinput
 import hashlib
+import json
 import os
 import platform
 import random
@@ -11,7 +12,6 @@ import shutil
 import signal
 import socket
 import subprocess
-import json
 import sys
 import time
 import urllib.request
@@ -52,9 +52,10 @@ class LatestVersionInstalledException(V2rayHelperException):
     pass
 
 
-# http://code.activestate.com/recipes/410666-signal-handler-decorator/
 def signal_handler(signal_number):
     """
+    from http://code.activestate.com/recipes/410666-signal-handler-decorator/
+
     A decorator to set the specified function as handler for a signal.
     This function is the 'outer' decorator, called with only the (non-function)
     arguments
@@ -73,7 +74,13 @@ def get_github_file_url(path):
 
 
 def get_ip():
-    # from https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+    """
+    from https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib
+
+    modified by Kotarou
+
+    :return: ip address
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:
             # doesn't even have to be reachable
@@ -86,6 +93,10 @@ def get_ip():
 
 
 def execute_external_command(_command):
+    """
+    :param _command: shell command
+    :return: execution result
+    """
     return subprocess.check_output(_command, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
 
 
@@ -174,6 +185,16 @@ def is_v2ray_installed(installed_raise_error=None, not_installed_raise_error=Non
     return install_status
 
 
+def get_v2ray_version():
+    def _try():
+        return execute_external_command('v2ray --version').split()[1]
+
+    def _except():
+        return None
+
+    return closure_try(_try, subprocess.CalledProcessError, _except)
+
+
 def is_collection(_arg):
     return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
 
@@ -199,16 +220,6 @@ def os_is_mac():
 
 def os_is_supported():
     return os_is_nix() or os_is_mac()
-
-
-def get_v2ray_version():
-    def _try():
-        return execute_external_command('v2ray --version').split()[1]
-
-    def _except():
-        return None
-
-    return closure_try(_try, subprocess.CalledProcessError, _except)
 
 
 def is_systemd():
@@ -808,7 +819,7 @@ def purge():
         print('Action cancelled.')
 
 
-def parse_command_line_input():
+def get_args():
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-a', '--auto', action='store_true', default=True, help='automatic mode')
@@ -828,7 +839,7 @@ def __init():
 
 
 @signal_handler(signal.SIGINT)
-def __handler(signum, frame):
+def __sigint_handler(signum, frame):
     print('\nQuitting...')
     exit(signum)
 
@@ -840,7 +851,7 @@ def __cleanup():
 
 
 if __name__ == "__main__":
-    args = parse_command_line_input()
+    args = get_args()
 
     try:
         operating_system = get_os_info()

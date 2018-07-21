@@ -5,11 +5,16 @@ Wants=network.target
 
 [Service]
 Type=simple
-PIDFile=/var/run/v2ray.pid
-ExecStart=/usr/bin/v2ray -config /etc/v2ray/config.json
 User=v2ray
 Group=v2ray
+PIDFile=/var/run/v2ray.pid
+ExecStart=/usr/bin/v2ray -config /etc/v2ray/config.json
 Restart=on-failure
+
+# Don't restart in the case of configuration error
+RestartPreventExitStatus=23
+# After unexpected exit, upload latest V2Ray log to official log service for future analysis.
+# ExecStopPost=/usr/bin/v2ray/upload.sh
 
 [Install]
 WantedBy=multi-user.target

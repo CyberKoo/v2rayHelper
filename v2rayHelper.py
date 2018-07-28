@@ -17,6 +17,7 @@ import time
 import urllib.request
 import uuid
 import zipfile
+from urllib.error import URLError
 from urllib.parse import urlparse
 
 
@@ -25,7 +26,8 @@ class V2rayHelperException(Exception):
 
 
 class UnsupportedPlatformException(V2rayHelperException):
-    pass
+    def __str__(self):
+        return 'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
 
 
 class ValidationException(V2rayHelperException):
@@ -48,8 +50,53 @@ class PrivilegeException(V2rayHelperException):
     pass
 
 
+class DownloadException(V2rayHelperException):
+    pass
+
+
 class LatestVersionInstalledException(V2rayHelperException):
     pass
+
+
+class OsUtil:
+    @staticmethod
+    def __is(os_name):
+        if is_collection(os_name):
+            return True if platform.system().lower() in [x.lower() for x in os_name] else False
+        else:
+            return platform.system().lower() == os_name.lower()
+
+    @staticmethod
+    def is_freebsd():
+        return OsUtil.__is('freebsd')
+
+    @staticmethod
+    def is_openbsd():
+        return OsUtil.__is('openbsd')
+
+    @staticmethod
+    def is_netbsd():
+        return OsUtil.__is('netbsd')
+
+    @staticmethod
+    def is_linux():
+        return OsUtil.__is('linux')
+
+    @staticmethod
+    def is_mac():
+        return OsUtil.__is('Darwin')
+
+    @staticmethod
+    def is_bsd():
+        return OsUtil.is_freebsd() or OsUtil.is_openbsd() or OsUtil.is_netbsd()
+
+    @staticmethod
+    def is_nix():
+        return OsUtil.is_bsd() or OsUtil.is_linux()
+
+    @staticmethod
+    def is_supported():
+        return OsUtil.is_nix() or OsUtil.is_mac()
 
 
 def signal_handler(signal_number):
@@ -92,12 +139,13 @@ def get_ip():
     return ip_address
 
 
-def execute_external_command(_command):
+def execute_external_command(_command, _encoding='utf-8'):
     """
     :param _command: shell command
+    :param _encoding: encoding, default utf-8
     :return: execution result
     """
-    return subprocess.check_output(_command, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+    return subprocess.check_output(_command, shell=True, stderr=subprocess.DEVNULL).decode(_encoding)
 
 
 def remove_if_exists(_path):
@@ -199,29 +247,6 @@ def is_collection(_arg):
     return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
 
 
-def os_is(os_name):
-    if is_collection(os_name):
-        return True if platform.system().lower() in [x.lower() for x in os_name] else False
-    else:
-        return platform.system().lower() == os_name.lower()
-
-
-def os_is_bsd():
-    return os_is(['openbsd', 'freebsd', 'netbsd'])
-
-
-def os_is_nix():
-    return os_is_bsd() or os_is('linux')
-
-
-def os_is_mac():
-    return os_is('Darwin')
-
-
-def os_is_supported():
-    return os_is_nix() or os_is_mac()
-
-
 def is_systemd():
     return os.path.isdir('/run/systemd/system')
 
@@ -231,12 +256,11 @@ def v2ray_service(command):
         execute_external_command('systemctl {} v2ray'.format(command))
     else:
         # TODO openbsd
-        if not os_is('openbsd'):
+        if not OsUtil.is_openbsd():
             execute_external_command('service v2ray {}'.format(command))
 
 
-def get_os_info():
-    system = platform.system()
+def get_architecture():
     arch = platform.architecture()[0][0:2]
     machine = platform.machine()
 
@@ -250,39 +274,41 @@ def get_os_info():
 
     # check architecture
     valid_architecture = False
-    if os_is_supported():
-        # make it to upper case to maintain the compatibility across all platforms
-        if machine.upper() not in supported['pc']:
-            for key in supported['arm']:
-                if machine in supported['arm'][key]:
-                    arch = key
-                    valid_architecture = True
-                    break
-        else:
-            valid_architecture = True
+
+    # make it to upper case to maintain the compatibility across all platforms
+    if machine.upper() not in supported['pc']:
+        for key in supported['arm']:
+            if machine in supported['arm'][key]:
+                arch = key
+                valid_architecture = True
+                break
+    else:
+        valid_architecture = True
 
     if valid_architecture:
-        return [system.lower(), arch, platform.architecture()[0], machine]
+        return [arch, platform.architecture()[0], machine]
 
-    raise UnsupportedPlatformException(
-        'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
-    )
+    raise UnsupportedPlatformException()
 
 
-def get_latest_version_from_api(os, arch, arch_num, machine):
+def get_latest_version_from_api(arch, arch_num, machine):
     api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
+    os = platform.system().lower()
 
-    with urllib.request.urlopen(api_url) as response:
-        json_response = json.loads(response.read().decode('utf8'))
-        pre_release = '(pre release)' if json_response['prerelease'] is True else ''
-        latest_version = json_response['tag_name']
+    try:
+        with urllib.request.urlopen(api_url) as response:
+            json_response = json.loads(response.read().decode('utf8'))
+            pre_release = '(pre release)' if json_response['prerelease'] is True else ''
+            latest_version = json_response['tag_name']
 
-        print('Hi there, the latest version of v2ray is {} {}'.format(latest_version, pre_release))
-        print('Operating system: {}-{} ({})'.format(os, arch_num, machine))
+            print('Hi there, the latest version of v2ray is {} {}'.format(latest_version, pre_release))
+            print('Operating system: {}-{} ({})'.format(os, arch_num, machine))
 
-        for assets in json_response['assets']:
-            if assets['name'].find('{}-{}.zip'.format(os, arch)) != -1:
-                return [assets['name'], latest_version]
+            for assets in json_response['assets']:
+                if assets['name'].find('{}-{}.zip'.format(os, arch)) != -1:
+                    return [assets['name'], latest_version]
+    except URLError:
+        raise DownloadException('Unable to fetch data from API')
 
 
 def get_meta_data(version, _file_name):
@@ -401,7 +427,11 @@ def download_file(_url, _file_name=None, dir='/tmp/v2rayHelper'):
 
             sys.stdout.flush()
 
-    urllib.request.urlretrieve(_url, temp_full_path, __report_hook)
+    try:
+        urllib.request.urlretrieve(_url, temp_full_path, __report_hook)
+    except URLError:
+        raise DownloadException('Unable to fetch url: {}'.format(_url))
+
     os.rename(temp_full_path, full_path)
 
 
@@ -446,7 +476,7 @@ def get_extracted_path(filename, version):
 
 
 def install_start_script():
-    if os_is('linux'):
+    if OsUtil.is_linux():
         # create systemd file or rc.d
         if is_systemd():
             download_file(get_github_file_url('misc/v2ray.service'), 'v2ray.service')
@@ -455,7 +485,7 @@ def install_start_script():
         else:
             # todo add support for legacy init scripts
             pass
-    elif os_is('freebsd'):
+    elif OsUtil.is_freebsd():
         download_file(get_github_file_url('misc/v2ray.freebsd'), 'v2ray')
         path = '/usr/local/etc/rc.d/v2ray'
 
@@ -464,17 +494,17 @@ def install_start_script():
 
         # create folder for pid file
         mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
-    elif os_is('openbsd'):
+    elif OsUtil.is_openbsd():
         pass
 
 
 def enable_auto_start():
     rc_file_path = '/etc/rc.conf'
 
-    if os_is_bsd() and not is_file_contains(rc_file_path, 'v2ray_enable'):
+    if OsUtil.is_bsd() and not is_file_contains(rc_file_path, 'v2ray_enable'):
         with open(rc_file_path, 'a+') as file:
             file.write('\nv2ray_enable="YES"')
-    elif os_is('linux'):
+    elif OsUtil.is_linux():
         if is_systemd():
             v2ray_service('enable')
 
@@ -482,7 +512,7 @@ def enable_auto_start():
 def disable_auto_start():
     rc_file_path = '/etc/rc.conf'
 
-    if os_is_bsd() and is_file_contains(rc_file_path, 'v2ray_enable'):
+    if OsUtil.is_bsd() and is_file_contains(rc_file_path, 'v2ray_enable'):
         with open(rc_file_path, 'r+') as file:
             new_f = file.readlines()
             file.seek(0)
@@ -490,7 +520,7 @@ def disable_auto_start():
                 if 'v2ray_enable' not in line:
                     file.write(line)
             file.truncate()
-    elif os_is('linux'):
+    elif OsUtil.is_linux():
         if is_systemd():
             v2ray_service('disable')
 
@@ -498,9 +528,9 @@ def disable_auto_start():
 def get_configuration_dir():
     conf_dir = None
 
-    if os_is(['linux', 'openbsd']):
+    if OsUtil.is_linux() or OsUtil.is_openbsd():
         conf_dir = '/etc/v2ray'
-    elif os_is('freebsd'):
+    elif OsUtil.is_freebsd():
         conf_dir = '/usr/local/etc/v2ray'
 
     return conf_dir
@@ -536,7 +566,7 @@ def install_default_config_file():
 
 def add_user(_user_ame=None):
     name = _user_ame if _user_ame is not None else 'v2ray'
-    prefix = 'pw ' if os_is('freebsd') else ''
+    prefix = 'pw ' if OsUtil.is_freebsd() else ''
 
     def _try_group():
         import grp
@@ -565,7 +595,7 @@ def add_user(_user_ame=None):
 
 def delete_user(_user_ame=None):
     name = _user_ame if _user_ame is not None else 'v2ray'
-    prefix = 'pw ' if os_is('freebsd') else ''
+    prefix = 'pw ' if OsUtil.is_freebsd() else ''
 
     def _try_delete_user():
         import pwd
@@ -666,7 +696,7 @@ def installer(filename, version, force=False):
     installed_path = download_and_place_v2ray(version, filename, 'installing')
 
     # create soft link, for linux /usr/bin, bsd /usr/local/bin
-    base_path = '/usr{}/bin'.format('/local' if os_is_bsd() else '')
+    base_path = '/usr{}/bin'.format('/local' if OsUtil.is_bsd() else '')
     executables = ['v2ray', 'v2ctl']
 
     for file in executables:
@@ -732,6 +762,17 @@ def mac_install(force):
             print('v2ray is already installed, use --force to force install')
     else:
         sys.exit('This script requires Homebrew')
+
+
+def relaunch_with_root():
+    # ask for root privileges
+    print('Re-lunching with root privileges...')
+    if is_command_exists('sudo'):
+        os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
+    elif is_command_exists('su'):
+        os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
+    else:
+        raise PrivilegeException('Sorry, cannot gain root privilege.')
 
 
 # https://stackoverflow.com/questions/3041986/apt-command-line-interface-like-yes-no-input
@@ -822,12 +863,12 @@ def purge():
 def get_args():
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-a', '--auto', action='store_true', default=True, help='automatic mode')
-    group.add_argument('-i', '--install', action='store_true', help='install v2ray')
-    group.add_argument('-u', '--upgrade', action='store_true', help='upgrade v2ray')
-    group.add_argument('-r', '--remove', action='store_true', help='remove v2ray')
-    group.add_argument('-p', '--purge', action='store_true', help='remove v2ray and configure file')
-    parser.add_argument('-f', '--force', action='store_true', help='force to do the selected action')
+    group.add_argument('-A', '--auto', action='store_true', default=True, help='automatic mode')
+    group.add_argument('-I', '--install', action='store_true', help='install v2ray')
+    group.add_argument('-U', '--upgrade', action='store_true', help='upgrade v2ray')
+    group.add_argument('-R', '--remove', action='store_true', help='remove v2ray')
+    group.add_argument('-P', '--purge', action='store_true', help='remove v2ray and configure file')
+    parser.add_argument('-F', '--force', action='store_true', help='force to do the selected action')
 
     return parser.parse_args()
 
@@ -854,12 +895,13 @@ if __name__ == "__main__":
     args = get_args()
 
     try:
-        operating_system = get_os_info()
+        architecture = get_architecture()
+        info = get_latest_version_from_api(*architecture)
 
-        if os_is_supported():
-            if os_is_nix():
+        if OsUtil.is_supported():
+            if OsUtil.is_nix():
                 if os.getuid() == 0:
-                    info = get_latest_version_from_api(*operating_system)
+                    info = get_latest_version_from_api(*architecture)
                     if args.install:
                         installer(*info, force=args.force)
                     elif args.upgrade:
@@ -871,16 +913,11 @@ if __name__ == "__main__":
                     elif args.auto:
                         command_auto_processor(*info)
                 else:
-                    # ask for root privileges
-                    print('Re-lunching with root privileges...')
-                    if is_command_exists('sudo'):
-                        os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
-                    elif is_command_exists('su'):
-                        os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
-                    else:
-                        raise PrivilegeException('Sorry, cannot gain root privilege.')
-            elif os_is_mac():
+                    relaunch_with_root()
+            elif OsUtil.is_mac():
                 mac_install(args.force)
+        else:
+            raise UnsupportedPlatformException()
     # V2rayHelperException handling
     except V2rayHelperException as e:
         sys.exit(str(e))

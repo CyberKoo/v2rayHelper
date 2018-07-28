@@ -896,7 +896,6 @@ if __name__ == "__main__":
 
     try:
         architecture = get_architecture()
-        info = get_latest_version_from_api(*architecture)
 
         if OsUtil.is_supported():
             if OsUtil.is_nix():

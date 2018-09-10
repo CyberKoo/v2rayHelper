@@ -91,9 +91,14 @@ class V2rayAPI:
             raise DownloadException('Unable to fetch data from API')
 
     def search(self, __arch_num, __machine):
+        if OSUtil.get_name() == 'darwin':
+            return ''
+
         for assets in self.__json['assets']:
-            if assets['name'].find('{}-{}.zip'.format(platform.system().lower(), __arch_num)) != -1:
+            if assets['name'].find('{}-{}.zip'.format(OSUtil.get_name(), __arch_num)) != -1:
                 return assets['name']
+
+        raise UnsupportedPlatformException()
 
     def get_latest_version(self):
         return self.__latest_version
@@ -110,6 +115,13 @@ class V2rayHelper:
         self.__api = V2rayAPI()
 
     @staticmethod
+    @atexit.register
+    def __cleanup__():
+        logging.debug('clean-up')
+        # delete temp folder
+        OSHelper.remove_if_exists('/tmp/v2rayHelper')
+
+    @staticmethod
     def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
         install_status = is_command_exists('v2ray')
 
@@ -124,7 +136,7 @@ class V2rayHelper:
     @staticmethod
     def __get_v2ray_version__():
         def _try():
-            return OSHelper.execute_external_command('v2ray --version').split()[1]
+            return OSHelper.execute('v2ray --version').split()[1]
 
         def _except():
             return None
@@ -133,14 +145,19 @@ class V2rayHelper:
 
     def __is_valid_combination__(self):
         supported = {
-            'pc': ['X86_64', 'I386'],
+            'pc': ['X86_64', 'I386', 'AMD64'],
+            'os': ['linux', 'freebsd', 'darwin'],
             'arm': {
                 'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
                 'arm64': ['aarch64']
             }
         }
 
-        # check architecture
+        # validate operating system
+        if OSUtil.get_name() not in supported['os']:
+            raise UnsupportedPlatformException()
+
+        # validate architecture
         # make it to upper case to maintain the compatibility across all platforms
         if self.__machine.upper() not in supported['pc']:
             for key in supported['arm']:
@@ -154,7 +171,6 @@ class V2rayHelper:
 
     def run(self, args):
         if self.__is_valid_combination__():
-            installed = self.__is_v2ray_installed__()
             version = self.__get_v2ray_version__()
             handler = OSUtil.get_os_handler(self.__arch)
 
@@ -171,7 +187,7 @@ class V2rayHelper:
 
             # display operating system information
             logging.info('Operating system: {}-{} ({})'.format(
-                platform.system().lower(),
+                OSUtil.get_name(),
                 self.__arch_num,
                 self.__machine)
             )
@@ -204,11 +220,11 @@ class V2rayHelper:
                 if args.force is False:
                     self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
                         'V2ray is not installed, you cannot uninstall it.'))
-                handler.remove(args.force)
+                handler.remove()
             elif args.purge:
                 handler.purge(args.sure)
             elif args.auto:
-                if not installed:
+                if version is None:
                     handler.install(latest_version, file_name)
                 else:
                     if version != latest_version:
@@ -242,7 +258,8 @@ class OSHandler(ABC):
 
     @abstractmethod
     def purge(self, confirmed):
-        pass
+        if not confirmed:
+            raise ConformationRequiredException('The following arguments are required: --sure')
 
     @staticmethod
     @abstractmethod
@@ -314,7 +331,6 @@ class UnixLikeHandler(OSHandler, ABC):
 
     def __init__(self, arch, root_required=False):
         super().__init__(arch)
-        self.__user_prefix = ''
 
         if root_required:
             if os.getuid() == 0:
@@ -352,6 +368,11 @@ class UnixLikeHandler(OSHandler, ABC):
     def __install_control_script__(self):
         pass
 
+    @staticmethod
+    @abstractmethod
+    def __get_user_prefix__():
+        pass
+
     def __add_user__(self, _user_ame=None):
         name = _user_ame if _user_ame is not None else 'v2ray'
 
@@ -364,14 +385,15 @@ class UnixLikeHandler(OSHandler, ABC):
             pwd.getpwnam(name)
 
         def _try_add_group():
-            OSHelper.execute_external_command('{}groupadd {}'.format(self.__user_prefix, name))
+            OSHelper.execute('{}groupadd {}'.format(self.__get_user_prefix__(), name))
 
         def _try_add_user():
             # delete the home folder
             OSHelper.remove_if_exists('/var/lib/{}'.format(name))
 
-            create_user = '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'.format(self.__user_prefix, name)
-            OSHelper.execute_external_command(create_user)
+            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(
+                self.__get_user_prefix__(), name)
+            OSHelper.execute(create_user)
 
         # add group
         closure_try(_try_group, KeyError, _try_add_group)
@@ -385,7 +407,7 @@ class UnixLikeHandler(OSHandler, ABC):
         def _try_delete_user():
             import pwd
             pwd.getpwnam(name)
-            OSHelper.execute_external_command('{0}userdel {1}'.format(self.__user_prefix, name))
+            OSHelper.execute('{0}userdel {1}'.format(self.__get_user_prefix__(), name))
 
             # delete if exists
             OSHelper.remove_if_exists('/var/lib/{}'.format(name))
@@ -393,7 +415,7 @@ class UnixLikeHandler(OSHandler, ABC):
         def _try_delete_group():
             import grp
             grp.getgrnam(name)
-            OSHelper.execute_external_command('{}groupdel {}'.format(self.__user_prefix, name))
+            OSHelper.execute('{}groupdel {}'.format(self.__get_user_prefix__(), name))
 
         def _do_nothing():
             pass
@@ -553,27 +575,26 @@ class UnixLikeHandler(OSHandler, ABC):
         :param confirmed: Bool
         :return: None
         """
-        if confirmed:
-            # uninstall first
-            self.remove()
+        super().purge(confirmed)
 
-            # delete configuration
-            logging.info('Deleting configuration file')
-            conf_dir = '/etc/v2ray'
-            if conf_dir is not None:
-                OSHelper.remove_if_exists(conf_dir)
+        # uninstall first
+        self.remove()
 
-            # delete user/group
-            logging.info('Deleting User/Group v2ray')
-            self.__delete_user__('v2ray')
+        # delete configuration
+        logging.info('Deleting configuration file')
+        conf_dir = '/etc/v2ray'
+        if conf_dir is not None:
+            OSHelper.remove_if_exists(conf_dir)
 
-            # delete all other file/folders
-            logging.info('Deleting all other files')
-            OSHelper.remove_if_exists('/etc/systemd/system/v2ray.service')
-            OSHelper.remove_if_exists('/usr/local/etc/rc.d/v2ray')
-            OSHelper.remove_if_exists('/var/run/v2ray/')
-        else:
-            raise ConformationRequiredException('error: the following arguments are required: --sure')
+        # delete user/group
+        logging.info('Deleting User/Group v2ray')
+        self.__delete_user__('v2ray')
+
+        # delete all other file/folders
+        logging.info('Deleting all other files')
+        OSHelper.remove_if_exists('/etc/systemd/system/v2ray.service')
+        OSHelper.remove_if_exists('/usr/local/etc/rc.d/v2ray')
+        OSHelper.remove_if_exists('/var/run/v2ray/')
 
 
 class LinuxHandler(UnixLikeHandler):
@@ -589,6 +610,10 @@ class LinuxHandler(UnixLikeHandler):
         return '/usr/bin'
 
     @staticmethod
+    def __get_user_prefix__():
+        return ''
+
+    @staticmethod
     def __auto_start_status__(status):
         """
         :param status: Bool
@@ -598,7 +623,7 @@ class LinuxHandler(UnixLikeHandler):
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute_external_command('systemctl {} v2ray'.format(action))
+        OSHelper.execute('systemctl {} v2ray'.format(action))
 
     def __install_control_script__(self):
         # download systemd controll script
@@ -619,7 +644,7 @@ class LegacyLinuxHandler(LinuxHandler):
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute_external_command('service v2ray {}'.format(action))
+        OSHelper.execute('service v2ray {}'.format(action))
 
 
 class MacOSHandler(UnixLikeHandler):
@@ -639,12 +664,16 @@ class MacOSHandler(UnixLikeHandler):
         pass
 
     @staticmethod
+    def __get_user_prefix__():
+        return ''
+
+    @staticmethod
     def __auto_start_status__(status):
         pass
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute_external_command('brew services {} v2ray-core'.format(action))
+        OSHelper.execute('brew services {} v2ray-core'.format(action))
 
     def __install_control_script__(self):
         pass
@@ -652,36 +681,46 @@ class MacOSHandler(UnixLikeHandler):
     def install(self, version, filename):
         # Install the official tap
         logging.info('Install the official tap...')
-        OSHelper.execute_external_command('brew tap v2ray/v2ray')
+        OSHelper.execute('brew tap v2ray/v2ray')
 
         # install v2ray
         logging.info('Install v2ray...')
-        OSHelper.execute_external_command('brew install v2ray-core')
+        OSHelper.execute('brew install v2ray-core')
 
         # set auto-start
         logging.info('register v2ray to launch at login...')
-        OSHelper.execute_external_command('brew services start v2ray-core')
+        OSHelper.execute('brew services start v2ray-core')
 
         # print message
         logging.info('Successfully installed v2ray')
 
     def upgrade(self, new_version, filename):
         # upgrading v2ray
-        # logging.info('Install v2ray...')
-        # execute_external_command('brew upgrade v2ray-core')
-        pass
+        logging.info('Upgrade v2ray...')
+        try:
+            OSHelper.execute('brew upgrade v2ray-core')
+        except subprocess.CalledProcessError:
+            logging.error('Cannot upgrade v2ray, subprocess returned an error')
 
     def remove(self, force=True):
-        pass
+        # upgrading v2ray
+        logging.info('Uninstalling v2ray...')
+        try:
+            OSHelper.execute('brew remove v2ray-core')
+        except subprocess.CalledProcessError:
+            logging.error('Cannot remove v2ray, subprocess returned an error')
 
     def purge(self, confirmed):
-        pass
+        super().purge(confirmed)
+        self.remove()
+        logging.info('Untapping v2ray/v2ray')
+        OSHelper.execute('brew untap v2ray/v2ray')
+        logging.info('Remove ')
 
 
 class FreeBSDHandler(UnixLikeHandler):
     def __init__(self, arch):
         super().__init__(arch, True)
-        self.__user_prefix = 'pw '
 
     @staticmethod
     def __get_base_path__():
@@ -690,6 +729,10 @@ class FreeBSDHandler(UnixLikeHandler):
     @staticmethod
     def __get_conf_dir__():
         return '/usr/local/etc/v2ray'
+
+    @staticmethod
+    def __get_user_prefix__():
+        return 'pw '
 
     def __install_control_script__(self):
         Downloader(self.__get_github_file_url__('misc/v2ray.freebsd'), 'v2ray').start()
@@ -709,7 +752,7 @@ class FreeBSDHandler(UnixLikeHandler):
             # Enable
             if not FileHelper.contains(rc_file_path, 'v2ray_enable'):
                 with open(rc_file_path, 'a+') as file:
-                    file.write('\nv2ray_enable="YES"')
+                    file.write('\nv2ray_enable="YES"\n')
         else:
             # Disable
             if FileHelper.contains(rc_file_path, 'v2ray_enable'):
@@ -723,22 +766,29 @@ class FreeBSDHandler(UnixLikeHandler):
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute_external_command('service v2ray {}'.format(action))
+        OSHelper.execute('service v2ray {}'.format(action))
 
     def install(self, version, filename):
         self.__base_install__(version, filename)
-
-    def purge(self, confirmed):
-        super().purge(confirmed)
 
 
 class OpenBSDHandler(UnixLikeHandler):
     def __init__(self, arch):
         super().__init__(arch, True)
-        self.__user_prefix = 'pw '
 
-    def purge(self, confirmed):
-        super().purge(confirmed)
+    @staticmethod
+    def __get_user_prefix__():
+        return 'pw '
+
+    # TODO
+    @staticmethod
+    def __get_conf_dir__():
+        pass
+
+    # TODO
+    @staticmethod
+    def __get_base_path__():
+        pass
 
     @staticmethod
     # TODO
@@ -756,16 +806,6 @@ class OpenBSDHandler(UnixLikeHandler):
 
     # TODO
     def install(self, version, filename):
-        pass
-
-    # TODO
-    @staticmethod
-    def __get_conf_dir__():
-        pass
-
-    # TODO
-    @staticmethod
-    def __get_base_path__():
         pass
 
 
@@ -799,7 +839,7 @@ class Downloader:
     def __get_remain_tty_width__(occupied):
         _width = 0
         if is_command_exists('stty'):
-            _width = int(OSHelper.execute_external_command('stty size').split()[1])
+            _width = int(OSHelper.execute('stty size').split()[1])
 
         return _width - occupied if _width > occupied else 0
 
@@ -884,9 +924,13 @@ class OSUtil:
     @staticmethod
     def __is(os_name):
         if is_collection(os_name):
-            return True if platform.system().lower() in [x.lower() for x in os_name] else False
+            return True if OSUtil.get_name() in [x.lower() for x in os_name] else False
         else:
-            return platform.system().lower() == os_name.lower()
+            return OSUtil.get_name() == os_name.lower()
+
+    @staticmethod
+    def get_name():
+        return platform.system().lower()
 
     @staticmethod
     def get_os_handler(__arch):
@@ -920,13 +964,13 @@ class OSUtil:
 
 class OSHelper:
     @staticmethod
-    def execute_external_command(_command, _encoding='utf-8'):
+    def execute(command, encoding='utf-8'):
         """
-        :param _command: shell command
-        :param _encoding: encoding, default utf-8
+        :param command: shell command
+        :param encoding: encoding, default utf-8
         :return: execution result
         """
-        return subprocess.check_output(_command, shell=True, stderr=subprocess.DEVNULL).decode(_encoding)
+        return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
 
     @staticmethod
     def get_ip():
@@ -1027,7 +1071,7 @@ def closure_try(__try, __except, __on_except):
 
 def is_command_exists(_command):
     def _try():
-        OSHelper.execute_external_command('type {}'.format(_command))
+        OSHelper.execute('type {}'.format(_command))
         return True
 
     def _except():
@@ -1063,18 +1107,6 @@ def get_args():
     parser.add_argument('--debug', action='store_true', help='show all logs')
 
     return parser.parse_args()
-
-
-def __init():
-    # clean-up and create temp folder
-    OSHelper.remove_if_exists('/tmp/v2rayHelper')
-    OSHelper.mkdir('/tmp/v2rayHelper', 0o644)
-
-
-@atexit.register
-def __cleanup():
-    # delete temp folder
-    OSHelper.remove_if_exists('/tmp/v2rayHelper')
 
 
 @signal_handler(signal.SIGINT)

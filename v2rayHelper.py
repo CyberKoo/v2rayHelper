@@ -156,15 +156,7 @@ class V2rayHelper:
         if self.__is_valid_combination__():
             installed = self.__is_v2ray_installed__()
             version = self.__get_v2ray_version__()
-
-            handler = None
-            # check os
-            if OsUtil.is_linux():
-                handler = LinuxHandler(self.__arch)
-            elif OsUtil.is_mac():
-                handler = MacOSHandler(self.__arch)
-            elif OsUtil.is_freebsd():
-                handler = FreeBSDHandler(self.__arch)
+            handler = OSUtil.get_os_handler(self.__arch)
 
             # get information from API
             self.__api.fetch()
@@ -888,7 +880,7 @@ class Downloader:
         os.rename(temp_full_path, full_path)
 
 
-class OsUtil:
+class OSUtil:
     @staticmethod
     def __is(os_name):
         if is_collection(os_name):
@@ -897,24 +889,33 @@ class OsUtil:
             return platform.system().lower() == os_name.lower()
 
     @staticmethod
+    def get_os_handler(__arch):
+        if OSUtil.is_freebsd():
+            return FreeBSDHandler(__arch)
+        elif OSUtil.is_linux():
+            return LinuxHandler(__arch)
+        elif OSUtil.is_mac():
+            return MacOSHandler(__arch)
+
+    @staticmethod
     def is_freebsd():
-        return OsUtil.__is('freebsd')
+        return OSUtil.__is('freebsd')
 
     @staticmethod
     def is_openbsd():
-        return OsUtil.__is('openbsd')
+        return OSUtil.__is('openbsd')
 
     @staticmethod
     def is_netbsd():
-        return OsUtil.__is('netbsd')
+        return OSUtil.__is('netbsd')
 
     @staticmethod
     def is_linux():
-        return OsUtil.__is('linux')
+        return OSUtil.__is('linux')
 
     @staticmethod
     def is_mac():
-        return OsUtil.__is('Darwin')
+        return OSUtil.__is('Darwin')
 
 
 class OSHelper:

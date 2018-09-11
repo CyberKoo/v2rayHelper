@@ -38,41 +38,6 @@ class MetaFetchException(V2rayHelperException):
     pass
 
 
-class V2rayAPI:
-    def __init__(self):
-        self.__json = None
-        self.__pre_release = None
-        self.__latest_version = None
-
-    def fetch(self):
-        api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
-
-        try:
-            with urllib.request.urlopen(api_url) as response:
-                self.__json = json.loads(response.read().decode('utf8'))
-                self.__pre_release = '(pre release)' if self.__json['prerelease'] else ''
-                self.__latest_version = self.__json['tag_name']
-        except URLError:
-            raise V2rayHelperException('Unable to fetch data from API')
-
-    def search(self, __arch_num, __machine):
-        # skip macos
-        if OSHelper.get_name() == 'darwin':
-            return ''
-
-        for assets in self.__json['assets']:
-            if assets['name'].find('{}-{}.zip'.format(OSHelper.get_name(), __arch_num)) != -1:
-                return assets['name']
-
-        raise UnsupportedPlatformException()
-
-    def get_latest_version(self):
-        return self.__latest_version
-
-    def get_pre_release(self):
-        return self.__pre_release
-
-
 class OSHandler(ABC):
     def __init__(self):
         super().__init__()
@@ -95,6 +60,7 @@ class OSHandler(ABC):
         s_counter = 0
         metadata = []
 
+        logging.info('Fetch metadata for version %s', version)
         try:
             with urllib.request.urlopen(url) as response:
                 for line in response.read().decode('utf-8').splitlines():
@@ -108,6 +74,7 @@ class OSHandler(ABC):
                             s_counter += 1
 
                         if data[0] == 'File:' and data[1] == file_name:
+                            logging.debug('metadata for %s has been found', file_name)
                             s_counter += 1
 
                 if len(metadata) != 0:
@@ -121,8 +88,11 @@ class OSHandler(ABC):
     def __get_extracted_path__(filename, version):
         split_folder = filename[0:-4].split('-')
         split_folder.insert(1, version)
+        path = '-'.join(split_folder)
 
-        return '-'.join(split_folder)
+        logging.debug('file extracted to %s', path)
+
+        return path
 
     @staticmethod
     def __sha1_file__(file_name):
@@ -195,10 +165,13 @@ class UnixLikeHandler(OSHandler, ABC):
         # ask for root privileges
         logging.info('Re-lunching with root privileges...')
         if CommandHelper.exists('sudo'):
+            logging.debug('Found sudo, I\'m going to use sudo to re-launch this software.')
             os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
         elif CommandHelper.exists('su'):
+            logging.debug('Found su, I\'m going to use su to re-launch this software.')
             os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
         else:
+            logging.debug('Oops, neither sudo nor su is found on this machine, throw an exception')
             raise V2rayHelperException('Sorry, cannot gain root privilege.')
 
     def __validate_download__(self, filename, metadata):
@@ -213,7 +186,10 @@ class UnixLikeHandler(OSHandler, ABC):
             if metadata[1] != sha1:
                 raise V2rayHelperException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
 
-            logging.info('File {} has passed the validation.'.format(os.path.basename(filename)))
+            logging.debug('actual size %d, expected size %d', file_size, int(metadata[0]))
+            logging.debug('actual sha1 %s, expected sha1 %s', sha1, metadata[1])
+
+            logging.info('File %s has passed the validation.', os.path.basename(filename))
         else:
             raise V2rayHelperException('Failed to perform validation, invalid metadata')
 
@@ -225,6 +201,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # move downloaded file to path_to
         shutil.move(path_from, path_to)
+        logging.debug('move %s to %s', path_from, path_to)
 
         # change file and dir permission
         for root, dirs, files in os.walk(path_to):
@@ -295,7 +272,7 @@ class UnixLikeHandler(OSHandler, ABC):
                 ['12345', new_token[1]]
             ])
         else:
-            logging.info('{} is already exists, skip installing config.json'.format(config_file))
+            logging.info('%s is already exists, skip installing config.json', config_file)
 
         # start v2ray
         self.__service__('start')
@@ -304,9 +281,9 @@ class UnixLikeHandler(OSHandler, ABC):
         logging.info('Successfully installed v2ray-{}'.format(version))
 
         if new_token is not None:
-            logging.info('v2ray is now bind on {}:{}'.format(OSHelper.get_ip(), new_token[1]))
-            logging.info('uuid: {}'.format(new_token[0]))
-            logging.info('alterId: {}'.format(64))
+            logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
+            logging.info('uuid: %s', new_token[0])
+            logging.info('alterId: %d', 64)
 
     def upgrade(self, version, filename):
         # download zip file
@@ -331,7 +308,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # restart v2ray
         self.__service__('restart')
-        logging.info('Successfully upgraded to v2ray-{}'.format(version))
+        logging.info('Successfully upgraded to v2ray-%s', version)
 
     def remove(self):
         logging.info('Uninstalling...')
@@ -615,14 +592,13 @@ class OpenBSDHandler(BSDHandler):
 
 
 class WindowsHandler(OSHandler):
-    def __init__(self):
-        # super().__init__()
-        raise UnsupportedPlatformException()
-
     def __post_init__(self):
-        import ctypes, sys
+        super(WindowsHandler, self).__post_init__()
         logging.debug('execute windows hanlder post-init')
 
+        raise UnsupportedPlatformException()
+
+        import ctypes, sys
         if not ctypes.windll.shell32.IsUserAnAdmin():
             # Re-run the program with admin rights
             ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
@@ -938,12 +914,47 @@ class CommandHelper:
             raise TypeError()
 
 
+class V2RayAPI:
+    def __init__(self):
+        self.__json = None
+        self.__pre_release = None
+        self.__latest_version = None
+
+    def fetch(self):
+        api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
+
+        try:
+            with urllib.request.urlopen(api_url) as response:
+                self.__json = json.loads(response.read().decode('utf8'))
+                self.__pre_release = '(pre release)' if self.__json['prerelease'] else ''
+                self.__latest_version = self.__json['tag_name']
+        except URLError:
+            raise V2rayHelperException('Unable to fetch data from API')
+
+    def search(self, __arch_num, __machine):
+        # skip macos
+        if OSHelper.get_name() == 'darwin':
+            return ''
+
+        for assets in self.__json['assets']:
+            if assets['name'].find('{}-{}.zip'.format(OSHelper.get_name(), __arch_num)) != -1:
+                return assets['name']
+
+        raise UnsupportedPlatformException()
+
+    def get_latest_version(self):
+        return self.__latest_version
+
+    def get_pre_release(self):
+        return self.__pre_release
+
+
 class V2rayHelper:
     def __init__(self):
         self.__arch = platform.architecture()[0]
         self.__arch_num = self.__arch[0:2]
         self.__machine = platform.machine()
-        self.__api = V2rayAPI()
+        self.__api = V2RayAPI()
 
     @staticmethod
     def __get_all_subclasses__(cls):
@@ -997,13 +1008,13 @@ class V2rayHelper:
             valid_architecture = True
 
         if valid_architecture:
-            logging.debug('This computer running a {} {}'.format(self.__arch, OSHelper.get_name()))
+            logging.debug('This computer running a %s %s', self.__arch, OSHelper.get_name())
 
             # find the correlated OSHandler
             for cls in self.__get_all_subclasses__(OSHandler):
-                logging.debug('OSHandler: {}, target os: {}'.format(cls.__name__, cls.__target_os__()))
+                logging.debug('OSHandler: %s, target os: %s', cls.__name__, cls.__target_os__())
                 if OSHelper.get_name() in cls.__target_os__():
-                    logging.debug('Found OSHandler: {}, returning'.format(cls.__name__))
+                    logging.debug('Found OSHandler: %s, returning', cls.__name__)
 
                     return cls
 
@@ -1020,19 +1031,16 @@ class V2rayHelper:
         latest_version = self.__api.get_latest_version()
 
         # display information obtained from api
-        logging.info('Hi there, the latest version of v2ray is {} {}'.format(
-            latest_version,
-            self.__api.get_pre_release())
-        )
+        logging.info('Hi there, the latest version of v2ray is %s %s',
+                     latest_version, self.__api.get_pre_release()
+                     )
 
         # display operating system information
-        logging.info('Operating system: {}-{} ({})'.format(
-            OSHelper.get_name(),
-            self.__arch_num,
-            self.__machine)
-        )
+        logging.info('Operating system: %s-%s (%s)',
+                     OSHelper.get_name(), self.__arch_num, self.__machine
+                     )
 
-        logging.info('Currently installed version: {}...'.format(version))
+        logging.info('Currently installed version: %s...', version)
 
         # execute
         if args.install:

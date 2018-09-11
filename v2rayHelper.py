@@ -4,6 +4,7 @@ import atexit
 import datetime
 import fileinput
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -108,133 +109,6 @@ class V2rayAPI:
         return self.__pre_release
 
 
-class V2rayHelper:
-    def __init__(self):
-        self.__arch = platform.architecture()[0]
-        self.__arch_num = platform.architecture()[0][0:2]
-        self.__machine = platform.machine()
-        self.__api = V2rayAPI()
-
-    @staticmethod
-    @atexit.register
-    def __cleanup__():
-        logging.debug('clean-up')
-        # delete temp folder
-        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
-
-    @staticmethod
-    def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
-        install_status = CommandHelper.exists('v2ray')
-
-        if install_status and installed_raise_error is not None:
-            raise installed_raise_error
-
-        if not install_status and not_installed_raise_error is not None:
-            raise not_installed_raise_error
-
-        return install_status
-
-    @staticmethod
-    def __get_v2ray_version__():
-        def _try():
-            return CommandHelper.execute('v2ray --version').split()[1]
-
-        def _except():
-            return None
-
-        return closure_try(_try, subprocess.CalledProcessError, _except)
-
-    def __is_valid_combination__(self):
-        supported = {
-            'pc': ['X86_64', 'I386', 'AMD64'],
-            'os': ['linux', 'freebsd', 'darwin', 'windows'],
-            'arm': {
-                'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
-                'arm64': ['aarch64']
-            }
-        }
-
-        # validate operating system
-        if OSUtil.get_name() not in supported['os']:
-            raise UnsupportedPlatformException()
-
-        # validate architecture
-        # make it to upper case to maintain the compatibility across all platforms
-        if self.__machine.upper() not in supported['pc']:
-            for key in supported['arm']:
-                if self.__machine in supported['arm'][key]:
-                    self.__arch = key
-                    return True
-        else:
-            return True
-
-        raise UnsupportedPlatformException()
-
-    def run(self, args):
-        if self.__is_valid_combination__():
-            version = self.__get_v2ray_version__()
-            handler = OSUtil.get_os_handler()
-
-            # get information from API
-            self.__api.fetch()
-            file_name = self.__api.search(self.__arch_num, self.__machine)
-            latest_version = self.__api.get_latest_version()
-
-            # display information obtained from api
-            logging.info('Hi there, the latest version of v2ray is {} {}'.format(
-                latest_version,
-                self.__api.get_pre_release())
-            )
-
-            # display operating system information
-            logging.info('Operating system: {}-{} ({})'.format(
-                OSUtil.get_name(),
-                self.__arch_num,
-                self.__machine)
-            )
-
-            logging.info('Currently installed version: {}...'.format(version))
-
-            # execute
-            if args.install:
-                if args.force is False:
-                    self.__is_v2ray_installed__(
-                        installed_raise_error=InstallingException(
-                            'v2ray is already installed, use --force to reinstall.')
-                    )
-
-                handler.install(latest_version, file_name)
-            elif args.upgrade:
-                self.__is_v2ray_installed__(
-                    not_installed_raise_error=UpgradingException('v2ray must be installed before you can upgrade it.')
-                )
-
-                if version != latest_version or args.force:
-                    if args.force:
-                        logging.info('You already installed the latest version, forced to upgrade')
-
-                        handler.upgrade(latest_version, file_name)
-                else:
-                    raise LatestVersionInstalledException(
-                        'You already installed the latest version, use --force to upgrade.')
-            elif args.remove:
-                if args.force is False:
-                    self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
-                        'V2ray is not installed, you cannot uninstall it.'))
-                handler.remove()
-            elif args.purge:
-                handler.purge(args.sure)
-            elif args.auto:
-                if version is None:
-                    handler.install(latest_version, file_name)
-                else:
-                    if version != latest_version:
-                        handler.upgrade(latest_version, file_name)
-                    else:
-                        raise LatestVersionInstalledException(
-                            'You already installed the latest version, use --force to upgrade.')
-
-
 class OSHandler(ABC):
     def __init__(self):
         super().__init__()
@@ -246,23 +120,6 @@ class OSHandler(ABC):
         # clean-up and create temp folder
         OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
         OSHelper.mkdir('{}/v2rayHelper'.format(OSHelper.get_temp_dir()), 0o644)
-
-    @abstractmethod
-    def install(self, version, filename):
-        pass
-
-    @abstractmethod
-    def upgrade(self, new_version, filename):
-        pass
-
-    @abstractmethod
-    def remove(self):
-        pass
-
-    @abstractmethod
-    def purge(self, confirmed):
-        if not confirmed:
-            raise ConformationRequiredException('The following arguments are required: --sure')
 
     @staticmethod
     @abstractmethod
@@ -323,8 +180,30 @@ class OSHandler(ABC):
 
     @staticmethod
     @abstractmethod
+    def __target_os__():
+        pass
+
+    @staticmethod
+    @abstractmethod
     def __place_file__(path_from):
         pass
+
+    @abstractmethod
+    def install(self, version, filename):
+        pass
+
+    @abstractmethod
+    def upgrade(self, new_version, filename):
+        pass
+
+    @abstractmethod
+    def remove(self):
+        pass
+
+    @abstractmethod
+    def purge(self, confirmed):
+        if not confirmed:
+            raise ConformationRequiredException('The following arguments are required: --sure')
 
 
 class UnixLikeHandler(OSHandler, ABC):
@@ -599,6 +478,10 @@ class LinuxHandler(UnixLikeHandler):
         super().__init__(True)
 
     @staticmethod
+    def __target_os__():
+        return ['linux']
+
+    @staticmethod
     def __get_conf_dir__():
         return '/etc/v2ray'
 
@@ -636,11 +519,14 @@ class LegacyLinuxHandler(LinuxHandler):
     """
         for legacy linux which doesn't have systemd support, e.g Centos 6
     """
-    pass
 
     @staticmethod
     def __service__(action):
         CommandHelper.execute('service v2ray {}'.format(action))
+
+    @staticmethod
+    def __target_os__():
+        return []
 
 
 class MacOSHandler(UnixLikeHandler):
@@ -649,6 +535,10 @@ class MacOSHandler(UnixLikeHandler):
         # check if brew is installed
         if not CommandHelper.exists('brew'):
             raise V2rayHelperException('This script requires Homebrew, please install Homebrew first')
+
+    @staticmethod
+    def __target_os__():
+        return ['darwin']
 
     @staticmethod
     def __get_conf_dir__():
@@ -717,6 +607,10 @@ class FreeBSDHandler(UnixLikeHandler):
         super().__init__(True)
 
     @staticmethod
+    def __target_os__():
+        return ['freebsd']
+
+    @staticmethod
     def __get_base_path__():
         return '/usr/local/bin'
 
@@ -770,6 +664,10 @@ class OpenBSDHandler(UnixLikeHandler):
         super().__init__(True)
 
     @staticmethod
+    def __target_os__():
+        return ['openbsd']
+
+    @staticmethod
     def __get_user_prefix__():
         return 'pw '
 
@@ -815,6 +713,10 @@ class WindowsHandler(OSHandler):
             ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
         else:
             super().__post_init__()
+
+    @staticmethod
+    def __target_os__():
+        return ['windows']
 
     def install(self, version, filename):
         pass
@@ -965,19 +867,6 @@ class OSUtil:
         return platform.system().lower()
 
     @staticmethod
-    def get_os_handler():
-        if OSUtil.is_freebsd():
-            return FreeBSDHandler()
-        elif OSUtil.is_linux():
-            return LinuxHandler()
-        elif OSUtil.is_mac():
-            return MacOSHandler()
-        elif OSUtil.is_windows():
-            return WindowsHandler()
-        else:
-            raise UnsupportedPlatformException()
-
-    @staticmethod
     def is_freebsd():
         return OSUtil.__is('freebsd')
 
@@ -1110,6 +999,151 @@ class CommandHelper:
             return None
         else:
             raise TypeError
+
+
+class V2rayHelper:
+    def __init__(self):
+        self.__arch = platform.architecture()[0]
+        self.__arch_num = platform.architecture()[0][0:2]
+        self.__machine = platform.machine()
+        self.__api = V2rayAPI()
+
+    @staticmethod
+    def __get_all_subclasses__(cls):
+        all_subclasses = []
+
+        for subclass in cls.__subclasses__():
+            # exclude abstract class
+            if not inspect.isabstract(subclass):
+                all_subclasses.append(subclass)
+            all_subclasses.extend(V2rayHelper.__get_all_subclasses__(subclass))
+
+        return all_subclasses
+
+    @staticmethod
+    @atexit.register
+    def __cleanup__():
+        logging.debug('clean-up')
+        # delete temp folder
+        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
+
+    @staticmethod
+    def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
+        install_status = CommandHelper.exists('v2ray')
+
+        if install_status and installed_raise_error is not None:
+            raise installed_raise_error
+
+        if not install_status and not_installed_raise_error is not None:
+            raise not_installed_raise_error
+
+        return install_status
+
+    @staticmethod
+    def __get_v2ray_version__():
+        def _try():
+            return CommandHelper.execute('v2ray --version').split()[1]
+
+        def _except():
+            return None
+
+        return closure_try(_try, subprocess.CalledProcessError, _except)
+
+    def __get_os_handler__(self):
+        cls = self.__get_all_subclasses__(OSHandler)
+
+        for c in cls:
+            if OSUtil.get_name() in c.__target_os__():
+                return c
+
+        raise UnsupportedPlatformException()
+
+    def __is_valid_combination__(self):
+        supported = {
+            'pc': ['X86_64', 'I386', 'AMD64'],
+            'arm': {
+                'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
+                'arm64': ['aarch64']
+            }
+        }
+
+        # validate architecture
+        # make it to upper case to maintain the compatibility across all platforms
+        if self.__machine.upper() not in supported['pc']:
+            for key in supported['arm']:
+                if self.__machine in supported['arm'][key]:
+                    self.__arch = key
+                    return True
+        else:
+            return True
+
+        raise UnsupportedPlatformException()
+
+    def run(self, args):
+        if self.__is_valid_combination__():
+            # make sure init function is executed
+            handler_func = self.__get_os_handler__()
+            handler = handler_func()
+            version = self.__get_v2ray_version__()
+
+            # get information from API
+            self.__api.fetch()
+            file_name = self.__api.search(self.__arch_num, self.__machine)
+            latest_version = self.__api.get_latest_version()
+
+            # display information obtained from api
+            logging.info('Hi there, the latest version of v2ray is {} {}'.format(
+                latest_version,
+                self.__api.get_pre_release())
+            )
+
+            # display operating system information
+            logging.info('Operating system: {}-{} ({})'.format(
+                OSUtil.get_name(),
+                self.__arch_num,
+                self.__machine)
+            )
+
+            logging.info('Currently installed version: {}...'.format(version))
+
+            # execute
+            if args.install:
+                if args.force is False:
+                    self.__is_v2ray_installed__(
+                        installed_raise_error=InstallingException(
+                            'v2ray is already installed, use --force to reinstall.')
+                    )
+
+                handler.install(latest_version, file_name)
+            elif args.upgrade:
+                self.__is_v2ray_installed__(
+                    not_installed_raise_error=UpgradingException('v2ray must be installed before you can upgrade it.')
+                )
+
+                if version != latest_version or args.force:
+                    if args.force:
+                        logging.info('You already installed the latest version, forced to upgrade')
+
+                        handler.upgrade(latest_version, file_name)
+                else:
+                    raise LatestVersionInstalledException(
+                        'You already installed the latest version, use --force to upgrade.')
+            elif args.remove:
+                if args.force is False:
+                    self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
+                        'V2ray is not installed, you cannot uninstall it.'))
+                handler.remove()
+            elif args.purge:
+                handler.purge(args.sure)
+            elif args.auto:
+                if version is None:
+                    handler.install(latest_version, file_name)
+                else:
+                    if version != latest_version:
+                        handler.upgrade(latest_version, file_name)
+                    else:
+                        raise LatestVersionInstalledException(
+                            'You already installed the latest version, use --force to upgrade.')
 
 
 def is_collection(_arg):

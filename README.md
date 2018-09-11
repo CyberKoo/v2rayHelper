@@ -2,7 +2,7 @@
 v2rayHelper is a python script. It provides an easy way to install or upgrade v2ray.
 
 ## Requirements
-* Python3 (3.4+)
+* Python3.4 or above
 * Systemd based Linux distro
 
 ## Tested platform
@@ -55,7 +55,7 @@ This command requires v2ray to be already installed.
 python3 v2rayHelper.py --upgrade
 ```
 
-#### Upgrade v2ray
+#### Remove v2ray
 This command will remove installed v2ray.
 ```shell
 python3 v2rayHelper.py --remove

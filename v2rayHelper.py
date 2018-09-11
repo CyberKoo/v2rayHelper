@@ -58,6 +58,10 @@ class PrivilegeException(V2rayHelperException):
     pass
 
 
+class MetadataException(V2rayHelperException):
+    pass
+
+
 class DownloadException(V2rayHelperException):
     pass
 
@@ -122,38 +126,36 @@ class OSHandler(ABC):
         OSHelper.mkdir(OSHelper.get_temp(), 0o644)
 
     @staticmethod
-    @abstractmethod
-    def __get_conf_dir__():
-        pass
-
-    @staticmethod
-    @abstractmethod
-    def __get_base_path__():
-        pass
-
-    @staticmethod
-    def __get_github_file_url__(path):
+    def __get_github_url__(path):
         return 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/{}'.format(path)
 
     @staticmethod
-    def __get_meta_data__(version, file_name):
+    def __get_metadata__(version, file_name):
         url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
-        full_path = OSHelper.get_temp(file='metadata.txt')
-        Downloader(url, 'metadata.txt').start()
+        s_counter = 0
+        metadata = []
 
-        result = []
-        with open(full_path, 'r+') as file:
-            for line in file:
-                split = line.split()
-                if len(split) == 2 and split[0] == 'File:':
-                    if split[1] == file_name:
-                        # return size and sha1
-                        result = [int(file.readline().split()[1]), file.readline().split()[1]]
-                        break
+        try:
+            with urllib.request.urlopen(url) as response:
+                for line in response.read().decode('utf-8').splitlines():
+                    data = line.split()
+                    data_len = len(data)
+                    if data_len == 0:
+                        s_counter = 0
+                    elif data_len == 2:
+                        if s_counter >= 1:
+                            metadata.append(data[1])
+                            s_counter += 1
 
-        OSHelper.remove_if_exists(full_path)
+                        if data[0] == 'File:' and data[1] == file_name:
+                            s_counter += 1
 
-        return result
+                if len(metadata) != 0:
+                    return metadata
+
+                raise MetadataException('Unable to to find the metadata for {}'.format(file_name))
+        except URLError as e:
+            raise DownloadException('Unable to fetch the Metadata', e)
 
     @staticmethod
     def __get_extracted_path__(filename, version):
@@ -166,10 +168,10 @@ class OSHandler(ABC):
     def __sha1_file__(file_name):
         sha1sum = hashlib.sha1()
         with open(file_name, 'rb') as source:
-            block = source.read(2 ** 16)
+            block = source.read(65536)
             while len(block) != 0:
                 sha1sum.update(block)
-                block = source.read(2 ** 16)
+                block = source.read(65536)
 
         return sha1sum.hexdigest()
 
@@ -181,6 +183,16 @@ class OSHandler(ABC):
     @staticmethod
     @abstractmethod
     def __target_os__():
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def __get_conf_dir__():
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def __get_base_path__():
         pass
 
     @staticmethod
@@ -215,9 +227,7 @@ class UnixLikeHandler(OSHandler, ABC):
         super().__init__()
 
         if root_required:
-            if os.getuid() == 0:
-                pass
-            else:
+            if os.getuid() != 0:
                 UnixLikeHandler.__relaunch_with_root__()
 
     @staticmethod
@@ -231,93 +241,21 @@ class UnixLikeHandler(OSHandler, ABC):
         else:
             raise PrivilegeException('Sorry, cannot gain root privilege.')
 
-    @staticmethod
-    @abstractmethod
-    def __service__(action):
-        pass
-
-    @abstractmethod
-    def __install_control_script__(self):
-        pass
-
-    @staticmethod
-    @abstractmethod
-    def __get_user_prefix__():
-        pass
-
-    @abstractmethod
-    def __auto_start_status__(self, status):
-        pass
-
-    def __add_user__(self, _user_ame=None):
-        name = _user_ame if _user_ame is not None else 'v2ray'
-
-        def _try_group():
-            import grp
-            grp.getgrnam(name)
-
-        def _try_user():
-            import pwd
-            pwd.getpwnam(name)
-
-        def _try_add_group():
-            CommandHelper.execute('{}groupadd {}'.format(self.__get_user_prefix__(), name))
-
-        def _try_add_user():
-            # delete the home folder
-            OSHelper.remove_if_exists('/var/lib/{}'.format(name))
-
-            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(
-                self.__get_user_prefix__(), name)
-            CommandHelper.execute(create_user)
-
-        # add group
-        closure_try(_try_group, KeyError, _try_add_group)
-
-        # add user
-        closure_try(_try_user, KeyError, _try_add_user)
-
-    def __delete_user__(self, _user_ame=None, _delete_group=True):
-        name = _user_ame if _user_ame is not None else 'v2ray'
-
-        def _try_delete_user():
-            import pwd
-            pwd.getpwnam(name)
-            CommandHelper.execute('{0}userdel {1}'.format(self.__get_user_prefix__(), name))
-
-            # delete if exists
-            OSHelper.remove_if_exists('/var/lib/{}'.format(name))
-
-        def _try_delete_group():
-            import grp
-            grp.getgrnam(name)
-            CommandHelper.execute('{}groupdel {}'.format(self.__get_user_prefix__(), name))
-
-        def _do_nothing():
-            pass
-
-        # delete user
-        closure_try(_try_delete_user, KeyError, _do_nothing)
-
-        # delete group
-        if _delete_group:
-            closure_try(_try_delete_group, KeyError, _do_nothing)
-
-    def __validate_download__(self, filename, meta_data):
-        if len(meta_data) != 0:
+    def __validate_download__(self, filename, metadata):
+        if len(metadata) != 0:
             # validate size
             file_size = os.path.getsize(filename)
             sha1 = self.__sha1_file__(filename)
 
-            if meta_data[0] != file_size:
-                raise ValidationException('Assertion failed. Expect Size {}, got {}.'.format(meta_data[0], file_size))
+            if int(metadata[0]) != file_size:
+                raise ValidationException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
 
-            if meta_data[1] != sha1:
-                raise ValidationException('Assertion failed. Expect SHA1 {}, got {}.'.format(meta_data[1], sha1))
+            if metadata[1] != sha1:
+                raise ValidationException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
 
             logging.info('File {} has passed the validation.'.format(os.path.basename(filename)))
         else:
-            raise ValidationException('Failed to perform validation, invalid meta data')
+            raise ValidationException('Failed to perform validation, invalid metadata')
 
     @staticmethod
     def __place_file__(path_from):
@@ -343,11 +281,11 @@ class UnixLikeHandler(OSHandler, ABC):
         return path_to
 
     def __download_and_place_v2ray__(self, version, filename):
-        meta_data = self.__get_meta_data__(version, filename)
+        metadata = self.__get_metadata__(version, filename)
         full_path = OSHelper.get_temp(file=filename)
         Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
                    filename).start()
-        self.__validate_download__(full_path, meta_data)
+        self.__validate_download__(full_path, metadata)
         self.__extract_file__(full_path, OSHelper.get_temp())
 
         # remove zip file
@@ -373,7 +311,7 @@ class UnixLikeHandler(OSHandler, ABC):
             os.symlink(installed_path + file, full_path)
 
         # add user
-        self.__add_user__()
+        LinuxHelper.add_user(self.__get_user_prefix__(), 'v2ray')
 
         # script
         self.__install_control_script__()
@@ -389,7 +327,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         if not os.path.exists(config_file):
             # download config file
-            Downloader(self.__get_github_file_url__('misc/config.json'), 'config.json').start()
+            Downloader(self.__get_github_url__('misc/config.json'), 'config.json').start()
             shutil.move(OSHelper.get_temp(file='config.json'), config_file)
 
             # replace default value with randomly generated one
@@ -464,13 +402,31 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # delete user/group
         logging.info('Deleting User/Group v2ray')
-        self.__delete_user__('v2ray')
+        LinuxHelper.delete_user(self.__get_user_prefix__())
 
         # delete all other file/folders
         logging.info('Deleting all other files')
         OSHelper.remove_if_exists('/etc/systemd/system/v2ray.service')
         OSHelper.remove_if_exists('/usr/local/etc/rc.d/v2ray')
         OSHelper.remove_if_exists('/var/run/v2ray/')
+
+    @staticmethod
+    @abstractmethod
+    def __service__(action):
+        pass
+
+    @abstractmethod
+    def __install_control_script__(self):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def __get_user_prefix__():
+        pass
+
+    @abstractmethod
+    def __auto_start_status__(self, status):
+        pass
 
 
 class LinuxHandler(UnixLikeHandler):
@@ -505,8 +461,8 @@ class LinuxHandler(UnixLikeHandler):
         CommandHelper.execute('systemctl {} v2ray'.format(action))
 
     def __install_control_script__(self):
-        # download systemd controll script
-        Downloader(self.__get_github_file_url__('misc/v2ray.service'), 'v2ray.service').start()
+        # download systemd control script
+        Downloader(self.__get_github_url__('misc/v2ray.service'), 'v2ray.service').start()
         # move this service file to /etc/systemd/system/
         shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
 
@@ -623,10 +579,10 @@ class FreeBSDHandler(UnixLikeHandler):
         return 'pw '
 
     def __install_control_script__(self):
-        Downloader(self.__get_github_file_url__('misc/v2ray.freebsd'), 'v2ray').start()
+        Downloader(self.__get_github_url__('misc/v2ray.freebsd'), 'v2ray').start()
         path = '/usr/local/etc/rc.d/v2ray'
 
-        shutil.move(OSHelper.get_temp(path=['v2ray']), path)
+        shutil.move(OSHelper.get_temp(file='v2ray'), path)
         os.chmod(path, 0o555)
 
         # create folder for pid file
@@ -745,14 +701,15 @@ class WindowsHandler(OSHandler):
 
 class Downloader:
     def __init__(self, url, file_name):
+        # init system variable
+        self.__url = url
+        self.__file_name = file_name
+        self.__path = OSHelper.get_temp()
+
         # variable for report hook
         self.__last_reported = 0
         self.__last_displayed = 0
         self.__start_time = 0
-
-        self.__url = url
-        self.__file_name = file_name
-        self.__path = OSHelper.get_temp()
 
     @staticmethod
     def __format_size__(size, is_speed=False):
@@ -771,11 +728,11 @@ class Downloader:
 
     @staticmethod
     def __get_remain_tty_width__(occupied):
-        _width = 0
+        width = 0
         if CommandHelper.exists('stty'):
-            _width = int(CommandHelper.execute('stty size').split()[1])
+            width = int(CommandHelper.execute('stty size').split()[1])
 
-        return _width - occupied if _width > occupied else 0
+        return width - occupied if width > occupied else 0
 
     def __display_base_name__(self, base_name):
         name_len = len(base_name)
@@ -843,7 +800,6 @@ class Downloader:
             else:
                 # TODO format output
                 sys.stdout.write("\r read {}".format(read_so_far))
-
                 sys.stdout.flush()
 
         try:
@@ -865,16 +821,14 @@ class OSHelper:
         if path is not None:
             full_path = '/'.join(path)
 
-        return '{}/{}/{}/{}'.format(tempfile.gettempdir().replace('\\', '/'), base_dir, full_path, file)\
+        return '{}/{}/{}/{}'.format(tempfile.gettempdir().replace('\\', '/'), base_dir, full_path, file) \
             .replace('//', '/')
 
     @staticmethod
     def get_ip():
         """
         from https://stackoverflow.com/questions/166506/finding-local-ip-addresses-using-pythons-stdlib
-
         modified by Kotarou
-
         :return: ip address
         """
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -920,6 +874,57 @@ class LinuxHelper(OSHelper):
     @staticmethod
     def is_systemd():
         return os.path.isdir('/run/systemd/system')
+
+    @staticmethod
+    def add_user(prefix, user_name='v2ray'):
+        import grp, pwd
+
+        def _try_group():
+            grp.getgrnam(user_name)
+
+        def _try_user():
+            pwd.getpwnam(user_name)
+
+        def _try_add_group():
+            CommandHelper.execute('{}groupadd {}'.format(prefix, user_name))
+
+        def _try_add_user():
+            # delete the home folder
+            OSHelper.remove_if_exists('/var/lib/{}'.format(user_name))
+
+            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(prefix, user_name)
+            CommandHelper.execute(create_user)
+
+        # add group
+        closure_try(_try_group, KeyError, _try_add_group)
+
+        # add user
+        closure_try(_try_user, KeyError, _try_add_user)
+
+    @staticmethod
+    def delete_user(prefix, user_name='v2ray', group_name='v2ray', delete_group=True):
+        import grp, pwd
+
+        def _try_delete_user():
+            pwd.getpwnam(user_name)
+            CommandHelper.execute('{0}userdel {1}'.format(prefix, user_name))
+
+            # delete if exists
+            OSHelper.remove_if_exists('/var/lib/{}'.format(user_name))
+
+        def _try_delete_group():
+            grp.getgrnam(group_name)
+            CommandHelper.execute('{}groupdel {}'.format(prefix, group_name))
+
+        def _do_nothing():
+            pass
+
+        # delete user
+        closure_try(_try_delete_user, KeyError, _do_nothing)
+
+        # delete group
+        if delete_group:
+            closure_try(_try_delete_group, KeyError, _do_nothing)
 
 
 class FileHelper:
@@ -996,7 +1001,6 @@ class V2rayHelper:
     @atexit.register
     def __cleanup__():
         logging.debug('Clean-up')
-        logging.debug('Temp dir: {}'.format(OSHelper.get_temp()))
 
         # delete temp folder
         OSHelper.remove_if_exists(OSHelper.get_temp())
@@ -1024,15 +1028,6 @@ class V2rayHelper:
         return closure_try(_try, subprocess.CalledProcessError, _except)
 
     def __get_os_handler__(self):
-        cls = self.__get_all_subclasses__(OSHandler)
-
-        for c in cls:
-            if OSHelper.get_name() in c.__target_os__():
-                return c
-
-        raise UnsupportedPlatformException()
-
-    def __is_valid_combination__(self):
         supported = {
             'pc': ['X86_64', 'I386', 'AMD64'],
             'arm': {
@@ -1042,82 +1037,94 @@ class V2rayHelper:
         }
 
         # validate architecture
+        valid_architecture = False
+        logging.debug('I\'m going to check the OS\'s architecture.')
         # make it to upper case to maintain the compatibility across all platforms
         if self.__machine.upper() not in supported['pc']:
             for key in supported['arm']:
                 if self.__machine in supported['arm'][key]:
                     self.__arch = key
-                    return True
+                    valid_architecture = True
         else:
-            return True
+            valid_architecture = True
+
+        if valid_architecture:
+            logging.debug('This computer running a {} {}'.format(self.__arch, OSHelper.get_name()))
+
+            # find the correlated OSHandler
+            for cls in self.__get_all_subclasses__(OSHandler):
+                logging.debug('OSHandler: {}, target os: {}'.format(cls.__name__, cls.__target_os__()))
+                if OSHelper.get_name() in cls.__target_os__():
+                    logging.debug('Found OSHandler: {}, returning'.format(cls.__name__))
+
+                    return cls
 
         raise UnsupportedPlatformException()
 
     def run(self, args):
-        if self.__is_valid_combination__():
-            # make sure init function is executed
-            handler_func = self.__get_os_handler__()
-            handler = handler_func()
-            version = self.__get_v2ray_version__()
+        # make sure init function is executed
+        handler = (self.__get_os_handler__())()
+        version = self.__get_v2ray_version__()
 
-            # get information from API
-            self.__api.fetch()
-            file_name = self.__api.search(self.__arch_num, self.__machine)
-            latest_version = self.__api.get_latest_version()
+        # get information from API
+        self.__api.fetch()
+        file_name = self.__api.search(self.__arch_num, self.__machine)
+        latest_version = self.__api.get_latest_version()
 
-            # display information obtained from api
-            logging.info('Hi there, the latest version of v2ray is {} {}'.format(
-                latest_version,
-                self.__api.get_pre_release())
-            )
+        # display information obtained from api
+        logging.info('Hi there, the latest version of v2ray is {} {}'.format(
+            latest_version,
+            self.__api.get_pre_release())
+        )
 
-            # display operating system information
-            logging.info('Operating system: {}-{} ({})'.format(
-                OSHelper.get_name(),
-                self.__arch_num,
-                self.__machine)
-            )
+        # display operating system information
+        logging.info('Operating system: {}-{} ({})'.format(
+            OSHelper.get_name(),
+            self.__arch_num,
+            self.__machine)
+        )
 
-            logging.info('Currently installed version: {}...'.format(version))
+        logging.info('Currently installed version: {}...'.format(version))
 
-            # execute
-            if args.install:
-                if args.force is False:
-                    self.__is_v2ray_installed__(
-                        installed_raise_error=InstallingException(
-                            'v2ray is already installed, use --force to reinstall.')
-                    )
-
-                handler.install(latest_version, file_name)
-            elif args.upgrade:
+        # execute
+        if args.install:
+            if args.force is False:
                 self.__is_v2ray_installed__(
-                    not_installed_raise_error=UpgradingException('v2ray must be installed before you can upgrade it.')
+                    installed_raise_error=InstallingException(
+                        'v2ray is already installed, use --force to reinstall.')
                 )
 
-                if version != latest_version or args.force:
-                    if args.force:
-                        logging.info('You already installed the latest version, forced to upgrade')
+            handler.install(latest_version, file_name)
+        elif args.upgrade:
+            self.__is_v2ray_installed__(
+                not_installed_raise_error=UpgradingException(
+                    'This computer running a 64bit Operation system must be installed before you can upgrade it.')
+            )
 
-                        handler.upgrade(latest_version, file_name)
+            if version != latest_version or args.force:
+                if args.force:
+                    logging.info('You already installed the latest version, forced to upgrade')
+
+                    handler.upgrade(latest_version, file_name)
+            else:
+                raise LatestVersionInstalledException(
+                    'You already installed the latest version, use --force to upgrade.')
+        elif args.remove:
+            if args.force is False:
+                self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
+                    'v2ray is not installed, you cannot uninstall it.'))
+            handler.remove()
+        elif args.purge:
+            handler.purge(args.sure)
+        elif args.auto:
+            if version is None:
+                handler.install(latest_version, file_name)
+            else:
+                if version != latest_version:
+                    handler.upgrade(latest_version, file_name)
                 else:
                     raise LatestVersionInstalledException(
                         'You already installed the latest version, use --force to upgrade.')
-            elif args.remove:
-                if args.force is False:
-                    self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
-                        'V2ray is not installed, you cannot uninstall it.'))
-                handler.remove()
-            elif args.purge:
-                handler.purge(args.sure)
-            elif args.auto:
-                if version is None:
-                    handler.install(latest_version, file_name)
-                else:
-                    if version != latest_version:
-                        handler.upgrade(latest_version, file_name)
-                    else:
-                        raise LatestVersionInstalledException(
-                            'You already installed the latest version, use --force to upgrade.')
 
 
 def is_collection(_arg):
@@ -1174,7 +1181,7 @@ if __name__ == "__main__":
 
     # set logger
     logging.basicConfig(
-        format='%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s',
+        format='%(asctime)s [%(threadName)s] [%(levelname)s]  %(message)s',
         level=logging.DEBUG if args.debug else logging.INFO,
         handlers=[
             logging.StreamHandler()

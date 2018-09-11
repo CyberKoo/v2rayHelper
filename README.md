@@ -8,22 +8,18 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 ## Tested platform
 | Operating system | Version     | Architecture | Supported                | Note                 |
 | :-----------: |:-------------: | :----------: | :----------------------: | :------------------: |
-| CentOS        | 7.5            | AMD64        | :heavy_check_mark:       |                      |
+| CentOS        | 7.0+           | AMD64        | :heavy_check_mark:       |                      |
 | CentOS        | 6.x            | X86/AMD64    | :heavy_exclamation_mark: | SysV                 |
-| Ubuntu        | 18.04 LTS      | AMD64/ARM32  | :heavy_check_mark:       |                      |
-| Ubuntu        | 17.10          | X86/AMD64    | :heavy_check_mark:       |                      |
-| Ubuntu        | 16.04 TLS      | X86/AMD64    | :heavy_check_mark:       |                      |
+| Ubuntu        | 16.04+         | X86/AMD64    | :heavy_check_mark:       |                      |
 | Ubuntu        | 14.04 LTS      | X86/AMD64    | :heavy_exclamation_mark: | Upstart              |
-| Debian        | 9 Stretch      | AMD64        | :heavy_check_mark:       |                      |
-| Debian        | 8 Jessie       | X86/AMD64    | :heavy_check_mark:       |                      |
+| Debian        | 8  / 9         | AMD64        | :heavy_check_mark:       |                      |
 | Arch Linux    | N/A            | ARM32        | :heavy_check_mark:       | Raspberry Pi 2 B+    |
 | OpenSUSE      | Leap 15.0      | AMD64/Aarch64| :heavy_check_mark:       |                      |
 | OpenSUSE      | Tumbleweed     | X86/AMD64    | :heavy_check_mark:       | 2018.05.30           |
-| FreeBSD       | 11.2           | AMD64        | :heavy_check_mark:       |                      |
-| FreeBSD       | 10.4           | AMD64        | :heavy_check_mark:       |                      |
-| OpenDSD       | 6.2            | AMD64        | :heavy_exclamation_mark: | Partially supported  |
+| FreeBSD       | 11.2 / 10.4    | AMD64        | :heavy_check_mark:       |                      |
+| OpenDSD       | 6.2            | AMD64        | :heavy_check_mark:       |                      |
 | MacOS         | 10.13.5        | AMD64        | :heavy_check_mark:       | Via Homebrew         |
-| Windows       | -              | X86/AMD64    | :x:                      |                      |
+| Windows       | 10 1803        | X86/AMD64    | :x:                      | Work In Progress     |
 
 ## Usage
 ### Download file from github

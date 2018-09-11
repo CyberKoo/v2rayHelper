@@ -1,0 +1,22 @@
+#!/bin/ksh
+#
+# $OpenBSD: v2ray,v 1.0 2018/09/12 01:54:25 rpe Exp $
+
+daemon="/usr/local/bin/v2ray"
+daemon_flags="-config /etc/v2ray/config.json"
+daemon_user="v2ray"
+
+. /etc/rc.d/rc.subr
+
+rc_bg=YES
+rc_reload=NO
+
+rc_check() {
+        pgrep -q -f "/usr/local/bin/v2ray"
+}
+
+rc_stop() {
+        pkill -f "/usr/local/bin/v2ray"
+}
+
+rc_cmd $1

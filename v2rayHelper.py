@@ -24,10 +24,6 @@ from abc import ABC, abstractmethod
 from urllib.error import URLError
 from urllib.parse import urlparse
 
-"""
-Exception block start
-"""
-
 
 class V2rayHelperException(Exception):
     pass
@@ -38,45 +34,8 @@ class UnsupportedPlatformException(V2rayHelperException):
         return 'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
 
 
-class ValidationException(V2rayHelperException):
+class MetaFetchException(V2rayHelperException):
     pass
-
-
-class InstallingException(V2rayHelperException):
-    pass
-
-
-class UpgradingException(V2rayHelperException):
-    pass
-
-
-class UninstallingException(V2rayHelperException):
-    pass
-
-
-class PrivilegeException(V2rayHelperException):
-    pass
-
-
-class MetadataException(V2rayHelperException):
-    pass
-
-
-class DownloadException(V2rayHelperException):
-    pass
-
-
-class LatestVersionInstalledException(V2rayHelperException):
-    pass
-
-
-class ConformationRequiredException(V2rayHelperException):
-    pass
-
-
-"""
-Exception block end
-"""
 
 
 class V2rayAPI:
@@ -94,9 +53,10 @@ class V2rayAPI:
                 self.__pre_release = '(pre release)' if self.__json['prerelease'] else ''
                 self.__latest_version = self.__json['tag_name']
         except URLError:
-            raise DownloadException('Unable to fetch data from API')
+            raise V2rayHelperException('Unable to fetch data from API')
 
     def search(self, __arch_num, __machine):
+        # skip macos
         if OSHelper.get_name() == 'darwin':
             return ''
 
@@ -119,7 +79,7 @@ class OSHandler(ABC):
         self.__post_init__()
 
     def __post_init__(self):
-        logging.debug('executing os handler post_init function')
+        logging.debug('executing base class post_init')
 
         # clean-up and create temp folder
         OSHelper.remove_if_exists(OSHelper.get_temp())
@@ -153,9 +113,9 @@ class OSHandler(ABC):
                 if len(metadata) != 0:
                     return metadata
 
-                raise MetadataException('Unable to to find the metadata for {}'.format(file_name))
+                raise MetaFetchException('Unable to to find the metadata for {}'.format(file_name))
         except URLError as e:
-            raise DownloadException('Unable to fetch the Metadata', e)
+            raise MetaFetchException('Unable to fetch the Metadata', e)
 
     @staticmethod
     def __get_extracted_path__(filename, version):
@@ -195,9 +155,8 @@ class OSHandler(ABC):
     def __get_base_path__():
         pass
 
-    @staticmethod
     @abstractmethod
-    def __place_file__(path_from):
+    def __place_file__(self, path_from):
         pass
 
     @abstractmethod
@@ -205,7 +164,7 @@ class OSHandler(ABC):
         pass
 
     @abstractmethod
-    def upgrade(self, new_version, filename):
+    def upgrade(self, version, filename):
         pass
 
     @abstractmethod
@@ -215,7 +174,7 @@ class OSHandler(ABC):
     @abstractmethod
     def purge(self, confirmed):
         if not confirmed:
-            raise ConformationRequiredException('The following arguments are required: --sure')
+            raise V2rayHelperException('The following arguments are required: --sure')
 
 
 class UnixLikeHandler(OSHandler, ABC):
@@ -225,6 +184,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
     def __init__(self, root_required=False):
         super().__init__()
+        self.__executables = ['v2ray', 'v2ctl']
 
         if root_required:
             if os.getuid() != 0:
@@ -239,7 +199,7 @@ class UnixLikeHandler(OSHandler, ABC):
         elif CommandHelper.exists('su'):
             os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
         else:
-            raise PrivilegeException('Sorry, cannot gain root privilege.')
+            raise V2rayHelperException('Sorry, cannot gain root privilege.')
 
     def __validate_download__(self, filename, metadata):
         if len(metadata) != 0:
@@ -248,19 +208,17 @@ class UnixLikeHandler(OSHandler, ABC):
             sha1 = self.__sha1_file__(filename)
 
             if int(metadata[0]) != file_size:
-                raise ValidationException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
+                raise V2rayHelperException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
 
             if metadata[1] != sha1:
-                raise ValidationException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
+                raise V2rayHelperException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
 
             logging.info('File {} has passed the validation.'.format(os.path.basename(filename)))
         else:
-            raise ValidationException('Failed to perform validation, invalid metadata')
+            raise V2rayHelperException('Failed to perform validation, invalid metadata')
 
-    @staticmethod
-    def __place_file__(path_from):
+    def __place_file__(self, path_from):
         path_to = '/opt/v2ray/'
-        executables = ['v2ray', 'v2ctl']
 
         # remove old file
         OSHelper.remove_if_exists(path_to)
@@ -273,45 +231,44 @@ class UnixLikeHandler(OSHandler, ABC):
             for dir in dirs:
                 os.chmod(os.path.join(root, dir), 0o755)
             for file in files:
-                if file not in executables:
+                if file not in self.__executables:
                     os.chmod(os.path.join(root, file), 0o644)
                 else:
                     os.chmod(os.path.join(root, file), 0o777)
 
-        return path_to
-
-    def __download_and_place_v2ray__(self, version, filename):
-        metadata = self.__get_metadata__(version, filename)
+    def install(self, version, filename):
+        # download zip file
         full_path = OSHelper.get_temp(file=filename)
         Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
                    filename).start()
-        self.__validate_download__(full_path, metadata)
+
+        # validate downloaded file with metadata
+        try:
+            self.__validate_download__(full_path, self.__get_metadata__(version, filename))
+        except MetaFetchException as ex:
+            logging.error('%s, validation process is skipped', ex)
+
+        # extract zip file
         self.__extract_file__(full_path, OSHelper.get_temp())
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
 
-        return self.__place_file__(self.__get_extracted_path__(full_path, version))
+        # place v2ray to /opt/v2ray
+        self.__place_file__(self.__get_extracted_path__(full_path, version))
 
-    def __base_install__(self, version, filename):
-        # download and install
-        installed_path = self.__download_and_place_v2ray__(version, filename)
-
-        # create soft link, for linux
-        base_path = self.__get_base_path__()
-        executables = ['v2ray', 'v2ctl']
-
-        for file in executables:
-            full_path = '{}/{}'.format(base_path, file)
+        # create soft link, for *nix
+        for file in self.__executables:
+            symlink_path = '{}/{}'.format(self.__get_base_path__(), file)
 
             # delete the old symlink
-            OSHelper.remove_if_exists(full_path)
+            OSHelper.remove_if_exists(symlink_path)
 
             # create symbol link
-            os.symlink(installed_path + file, full_path)
+            os.symlink('/opt/v2ray/{}'.format(file), symlink_path)
 
         # add user
-        LinuxHelper.add_user(self.__get_user_prefix__(), 'v2ray')
+        UnixLikeHelper.add_user(self.__get_user_prefix__(), self.__add_user_command__(), 'v2ray')
 
         # script
         self.__install_control_script__()
@@ -351,13 +308,30 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.info('uuid: {}'.format(new_token[0]))
             logging.info('alterId: {}'.format(64))
 
-    def upgrade(self, new_version, filename):
-        # download and place file
-        self.__download_and_place_v2ray__(new_version, filename)
+    def upgrade(self, version, filename):
+        # download zip file
+        full_path = OSHelper.get_temp(file=filename)
+        Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
+                   filename).start()
+
+        # validate downloaded file with metadata
+        try:
+            self.__validate_download__(full_path, self.__get_metadata__(version, filename))
+        except MetaFetchException as ex:
+            logging.error('%s, validation process is skipped', ex)
+
+        # extract zip file
+        self.__extract_file__(full_path, OSHelper.get_temp())
+
+        # remove zip file
+        OSHelper.remove_if_exists(full_path)
+
+        # place v2ray to /opt/v2ray
+        self.__place_file__(self.__get_extracted_path__(full_path, version))
 
         # restart v2ray
         self.__service__('restart')
-        logging.info('Successfully upgraded to v2ray-{}'.format(new_version))
+        logging.info('Successfully upgraded to v2ray-{}'.format(version))
 
     def remove(self):
         logging.info('Uninstalling...')
@@ -402,7 +376,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # delete user/group
         logging.info('Deleting User/Group v2ray')
-        LinuxHelper.delete_user(self.__get_user_prefix__())
+        UnixLikeHelper.delete_user(self.__get_user_prefix__())
 
         # delete all other file/folders
         logging.info('Deleting all other files')
@@ -411,17 +385,20 @@ class UnixLikeHandler(OSHandler, ABC):
         OSHelper.remove_if_exists('/var/run/v2ray/')
 
     @staticmethod
+    def __get_user_prefix__():
+        return ''
+
+    @staticmethod
+    def __add_user_command__():
+        return None
+
+    @staticmethod
     @abstractmethod
     def __service__(action):
         pass
 
     @abstractmethod
     def __install_control_script__(self):
-        pass
-
-    @staticmethod
-    @abstractmethod
-    def __get_user_prefix__():
         pass
 
     @abstractmethod
@@ -445,10 +422,6 @@ class LinuxHandler(UnixLikeHandler):
     def __get_base_path__():
         return '/usr/bin'
 
-    @staticmethod
-    def __get_user_prefix__():
-        return ''
-
     def __auto_start_status__(self, status):
         """
         :param status: Bool
@@ -465,9 +438,6 @@ class LinuxHandler(UnixLikeHandler):
         Downloader(self.__get_github_url__('misc/v2ray.service'), 'v2ray.service').start()
         # move this service file to /etc/systemd/system/
         shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
-
-    def install(self, version, filename):
-        self.__base_install__(version, filename)
 
 
 # TODO add legacy linux support
@@ -493,10 +463,6 @@ class MacOSHandler(UnixLikeHandler):
             raise V2rayHelperException('This script requires Homebrew, please install Homebrew first')
 
     @staticmethod
-    def __target_os__():
-        return ['darwin']
-
-    @staticmethod
     def __get_conf_dir__():
         pass
 
@@ -505,8 +471,8 @@ class MacOSHandler(UnixLikeHandler):
         pass
 
     @staticmethod
-    def __get_user_prefix__():
-        return ''
+    def __target_os__():
+        return ['darwin']
 
     @staticmethod
     def __service__(action):
@@ -534,7 +500,7 @@ class MacOSHandler(UnixLikeHandler):
         # print message
         logging.info('Successfully installed v2ray')
 
-    def upgrade(self, new_version, filename):
+    def upgrade(self, version, filename):
         # upgrading v2ray
         logging.info('Upgrade v2ray...')
         try:
@@ -558,35 +524,9 @@ class MacOSHandler(UnixLikeHandler):
         logging.info('Remove ')
 
 
-class FreeBSDHandler(UnixLikeHandler):
+class BSDHandler(UnixLikeHandler, ABC):
     def __init__(self):
         super().__init__(True)
-
-    @staticmethod
-    def __target_os__():
-        return ['freebsd']
-
-    @staticmethod
-    def __get_base_path__():
-        return '/usr/local/bin'
-
-    @staticmethod
-    def __get_conf_dir__():
-        return '/usr/local/etc/v2ray'
-
-    @staticmethod
-    def __get_user_prefix__():
-        return 'pw '
-
-    def __install_control_script__(self):
-        Downloader(self.__get_github_url__('misc/v2ray.freebsd'), 'v2ray').start()
-        path = '/usr/local/etc/rc.d/v2ray'
-
-        shutil.move(OSHelper.get_temp(file='v2ray'), path)
-        os.chmod(path, 0o555)
-
-        # create folder for pid file
-        LinuxHelper.mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
 
     def __auto_start_status__(self, status):
         rc_file_path = '/etc/rc.conf'
@@ -608,51 +548,70 @@ class FreeBSDHandler(UnixLikeHandler):
                     file.truncate()
 
     @staticmethod
-    def __service__(action):
-        CommandHelper.execute('service v2ray {}'.format(action))
-
-    def install(self, version, filename):
-        self.__base_install__(version, filename)
+    def __get_base_path__():
+        return '/usr/local/bin'
 
 
-class OpenBSDHandler(UnixLikeHandler):
-    def __init__(self):
-        super().__init__(True)
-
+class FreeBSDHandler(BSDHandler):
     @staticmethod
     def __target_os__():
-        return ['openbsd']
+        return ['freebsd']
+
+    @staticmethod
+    def __get_conf_dir__():
+        return '/usr/local/etc/v2ray'
 
     @staticmethod
     def __get_user_prefix__():
         return 'pw '
 
-    # TODO
+    @staticmethod
+    def __service__(action):
+        CommandHelper.execute('service v2ray {}'.format(action))
+
+    def __install_control_script__(self):
+        Downloader(self.__get_github_url__('misc/v2ray.freebsd'), 'v2ray').start()
+        path = '/usr/local/etc/rc.d/v2ray'
+
+        shutil.move(OSHelper.get_temp(file='v2ray'), path)
+        os.chmod(path, 0o555)
+
+        # create folder for pid file
+        UnixLikeHelper.mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
+
+
+class OpenBSDHandler(BSDHandler):
+    @staticmethod
+    def __target_os__():
+        return ['openbsd']
+
     @staticmethod
     def __get_conf_dir__():
-        pass
-
-    # TODO
-    @staticmethod
-    def __get_base_path__():
-        pass
+        return '/etc/v2ray'
 
     @staticmethod
-    # TODO
     def __service__(action):
-        pass
+        CommandHelper.execute('rcctl {} v2ray'.format(action))
 
-    # TODO
-    def __auto_start_status__(self, status):
-        pass
+    @staticmethod
+    def __add_user_command__():
+        return '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'
 
-    # TODO
     def __install_control_script__(self):
-        pass
+        Downloader(self.__get_github_url__('misc/v2ray.openbsd'), 'v2ray').start()
+        path = '/etc/rc.d/v2ray'
 
-    # TODO
-    def install(self, version, filename):
-        pass
+        shutil.move(OSHelper.get_temp(file='v2ray'), path)
+        os.chmod(path, 0o555)
+
+        # create folder for pid file
+        UnixLikeHelper.mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
+
+    def purge(self, confirmed):
+        super().purge(confirmed)
+
+        # delete rc.d file
+        OSHelper.remove_if_exists('/etc/rc.d/v2ray')
 
 
 class WindowsHandler(OSHandler):
@@ -677,7 +636,7 @@ class WindowsHandler(OSHandler):
     def install(self, version, filename):
         pass
 
-    def upgrade(self, new_version, filename):
+    def upgrade(self, version, filename):
         pass
 
     def remove(self):
@@ -694,8 +653,7 @@ class WindowsHandler(OSHandler):
     def __get_base_path__():
         pass
 
-    @staticmethod
-    def __place_file__(path_from):
+    def __place_file__(self, path_from):
         pass
 
 
@@ -805,7 +763,7 @@ class Downloader:
         try:
             urllib.request.urlretrieve(self.__url, temp_full_path, __report_hook)
         except URLError:
-            raise DownloadException('Unable to fetch url: {}'.format(self.__url))
+            raise V2rayHelperException('Unable to fetch url: {}'.format(self.__url))
 
         os.rename(temp_full_path, full_path)
 
@@ -855,11 +813,11 @@ class OSHelper:
             os.mkdir(_path, _perm)
 
 
-class LinuxHelper(OSHelper):
+class UnixLikeHelper(OSHelper):
     @staticmethod
     def chown(path, user=None, group=None):
         if user is None and group is None:
-            raise RuntimeError('username and group cannot be empty at the same time.')
+            raise V2rayHelperException('username and group cannot be empty at the same time.')
 
         if user is not None:
             shutil.chown(path, user=user)
@@ -869,14 +827,14 @@ class LinuxHelper(OSHelper):
     @staticmethod
     def mkdir_chown(path, perm=0o755, user=None, group=None):
         OSHelper.mkdir(path, perm)
-        LinuxHelper.chown(path, user, group)
+        UnixLikeHelper.chown(path, user, group)
 
     @staticmethod
     def is_systemd():
         return os.path.isdir('/run/systemd/system')
 
     @staticmethod
-    def add_user(prefix, user_name='v2ray'):
+    def add_user(prefix, command=None, user_name='v2ray'):
         import grp, pwd
 
         def _try_group():
@@ -892,7 +850,9 @@ class LinuxHelper(OSHelper):
             # delete the home folder
             OSHelper.remove_if_exists('/var/lib/{}'.format(user_name))
 
-            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(prefix, user_name)
+            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(prefix, user_name) \
+                if command is None else command.format(prefix, user_name)
+
             CommandHelper.execute(create_user)
 
         # add group
@@ -975,13 +935,13 @@ class CommandHelper:
                     return command
             return None
         else:
-            raise TypeError
+            raise TypeError()
 
 
 class V2rayHelper:
     def __init__(self):
         self.__arch = platform.architecture()[0]
-        self.__arch_num = platform.architecture()[0][0:2]
+        self.__arch_num = self.__arch[0:2]
         self.__machine = platform.machine()
         self.__api = V2rayAPI()
 
@@ -1004,18 +964,6 @@ class V2rayHelper:
 
         # delete temp folder
         OSHelper.remove_if_exists(OSHelper.get_temp())
-
-    @staticmethod
-    def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
-        install_status = CommandHelper.exists('v2ray')
-
-        if install_status and installed_raise_error is not None:
-            raise installed_raise_error
-
-        if not install_status and not_installed_raise_error is not None:
-            raise not_installed_raise_error
-
-        return install_status
 
     @staticmethod
     def __get_v2ray_version__():
@@ -1089,17 +1037,13 @@ class V2rayHelper:
         # execute
         if args.install:
             if args.force is False:
-                self.__is_v2ray_installed__(
-                    installed_raise_error=InstallingException(
-                        'v2ray is already installed, use --force to reinstall.')
-                )
+                if version is not None:
+                    raise V2rayHelperException('v2ray is already installed, use --force to reinstall.')
 
             handler.install(latest_version, file_name)
         elif args.upgrade:
-            self.__is_v2ray_installed__(
-                not_installed_raise_error=UpgradingException(
-                    'This computer running a 64bit Operation system must be installed before you can upgrade it.')
-            )
+            if version is None:
+                raise V2rayHelperException('v2ray must be installed before you can upgrade it.')
 
             if version != latest_version or args.force:
                 if args.force:
@@ -1107,12 +1051,11 @@ class V2rayHelper:
 
                     handler.upgrade(latest_version, file_name)
             else:
-                raise LatestVersionInstalledException(
-                    'You already installed the latest version, use --force to upgrade.')
+                raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
         elif args.remove:
             if args.force is False:
-                self.__is_v2ray_installed__(not_installed_raise_error=UninstallingException(
-                    'v2ray is not installed, you cannot uninstall it.'))
+                if version is None:
+                    raise V2rayHelperException('v2ray is not installed, you cannot uninstall it.')
             handler.remove()
         elif args.purge:
             handler.purge(args.sure)
@@ -1123,8 +1066,7 @@ class V2rayHelper:
                 if version != latest_version:
                     handler.upgrade(latest_version, file_name)
                 else:
-                    raise LatestVersionInstalledException(
-                        'You already installed the latest version, use --force to upgrade.')
+                    raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
 
 
 def is_collection(_arg):
@@ -1181,7 +1123,7 @@ if __name__ == "__main__":
 
     # set logger
     logging.basicConfig(
-        format='%(asctime)s [%(threadName)s] [%(levelname)s]  %(message)s',
+        format='%(asctime)s [%(threadName)s] [%(levelname)8s]  %(message)s',
         level=logging.DEBUG if args.debug else logging.INFO,
         handlers=[
             logging.StreamHandler()

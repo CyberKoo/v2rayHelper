@@ -2,7 +2,7 @@
 v2rayHelper is a python script. It provides an easy way to install or upgrade v2ray.
 
 ## Requirements
-* Python3 (3.4+)
+* Python3.4 or above
 * Systemd based Linux distro
 
 ## Tested platform
@@ -19,7 +19,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | Arch Linux    | N/A            | ARM32        | :heavy_check_mark:       | Raspberry Pi 2 B+    |
 | OpenSUSE      | Leap 15.0      | AMD64/Aarch64| :heavy_check_mark:       |                      |
 | OpenSUSE      | Tumbleweed     | X86/AMD64    | :heavy_check_mark:       | 2018.05.30           |
-| FreeBSD       | 11.1           | AMD64        | :heavy_check_mark:       |                      |
+| FreeBSD       | 11.2           | AMD64        | :heavy_check_mark:       |                      |
 | FreeBSD       | 10.4           | AMD64        | :heavy_check_mark:       |                      |
 | OpenDSD       | 6.2            | AMD64        | :heavy_exclamation_mark: | Partially supported  |
 | MacOS         | 10.13.5        | AMD64        | :heavy_check_mark:       | Via Homebrew         |
@@ -55,7 +55,7 @@ This command requires v2ray to be already installed.
 python3 v2rayHelper.py --upgrade
 ```
 
-#### Upgrade v2ray
+#### Remove v2ray
 This command will remove installed v2ray.
 ```shell
 python3 v2rayHelper.py --remove

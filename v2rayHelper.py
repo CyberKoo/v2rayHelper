@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -110,8 +111,8 @@ class V2rayAPI:
 class V2rayHelper:
     def __init__(self):
         self.__arch = platform.architecture()[0]
-        self.__machine = platform.machine()
         self.__arch_num = platform.architecture()[0][0:2]
+        self.__machine = platform.machine()
         self.__api = V2rayAPI()
 
     @staticmethod
@@ -119,11 +120,11 @@ class V2rayHelper:
     def __cleanup__():
         logging.debug('clean-up')
         # delete temp folder
-        OSHelper.remove_if_exists('/tmp/v2rayHelper')
+        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
 
     @staticmethod
     def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
-        install_status = is_command_exists('v2ray')
+        install_status = CommandHelper.exists('v2ray')
 
         if install_status and installed_raise_error is not None:
             raise installed_raise_error
@@ -136,7 +137,7 @@ class V2rayHelper:
     @staticmethod
     def __get_v2ray_version__():
         def _try():
-            return OSHelper.execute('v2ray --version').split()[1]
+            return CommandHelper.execute('v2ray --version').split()[1]
 
         def _except():
             return None
@@ -146,7 +147,7 @@ class V2rayHelper:
     def __is_valid_combination__(self):
         supported = {
             'pc': ['X86_64', 'I386', 'AMD64'],
-            'os': ['linux', 'freebsd', 'darwin'],
+            'os': ['linux', 'freebsd', 'darwin', 'windows'],
             'arm': {
                 'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
                 'arm64': ['aarch64']
@@ -172,7 +173,7 @@ class V2rayHelper:
     def run(self, args):
         if self.__is_valid_combination__():
             version = self.__get_v2ray_version__()
-            handler = OSUtil.get_os_handler(self.__arch)
+            handler = OSUtil.get_os_handler()
 
             # get information from API
             self.__api.fetch()
@@ -235,14 +236,16 @@ class V2rayHelper:
 
 
 class OSHandler(ABC):
-    def __init__(self, arch):
+    def __init__(self):
         super().__init__()
         self.__post_init__()
-        self.__arch = arch
 
-    @abstractmethod
     def __post_init__(self):
-        pass
+        logging.debug('executing os handler post_init function')
+
+        # clean-up and create temp folder
+        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
+        OSHelper.mkdir('{}/v2rayHelper'.format(OSHelper.get_temp_dir()), 0o644)
 
     @abstractmethod
     def install(self, version, filename):
@@ -278,7 +281,7 @@ class OSHandler(ABC):
     @staticmethod
     def __get_meta_data__(version, file_name):
         url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
-        full_path = '/tmp/v2rayHelper/metadata.txt'
+        full_path = '{}/v2rayHelper/metadata.txt'.format(OSHelper.get_temp_dir())
         Downloader(url, 'metadata.txt').start()
 
         result = []
@@ -329,8 +332,8 @@ class UnixLikeHandler(OSHandler, ABC):
     A generic unix like system handler
     """
 
-    def __init__(self, arch, root_required=False):
-        super().__init__(arch)
+    def __init__(self, root_required=False):
+        super().__init__()
 
         if root_required:
             if os.getuid() == 0:
@@ -338,26 +341,16 @@ class UnixLikeHandler(OSHandler, ABC):
             else:
                 UnixLikeHandler.__relaunch_with_root__()
 
-    def __post_init__(self):
-        # clean-up and create temp folder
-        OSHelper.remove_if_exists('/tmp/v2rayHelper')
-        OSHelper.mkdir('/tmp/v2rayHelper', 0o644)
-
     @staticmethod
     def __relaunch_with_root__():
         # ask for root privileges
         logging.info('Re-lunching with root privileges...')
-        if is_command_exists('sudo'):
+        if CommandHelper.exists('sudo'):
             os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
-        elif is_command_exists('su'):
+        elif CommandHelper.exists('su'):
             os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
         else:
             raise PrivilegeException('Sorry, cannot gain root privilege.')
-
-    @staticmethod
-    @abstractmethod
-    def __auto_start_status__(status):
-        pass
 
     @staticmethod
     @abstractmethod
@@ -373,6 +366,10 @@ class UnixLikeHandler(OSHandler, ABC):
     def __get_user_prefix__():
         pass
 
+    @abstractmethod
+    def __auto_start_status__(self, status):
+        pass
+
     def __add_user__(self, _user_ame=None):
         name = _user_ame if _user_ame is not None else 'v2ray'
 
@@ -385,7 +382,7 @@ class UnixLikeHandler(OSHandler, ABC):
             pwd.getpwnam(name)
 
         def _try_add_group():
-            OSHelper.execute('{}groupadd {}'.format(self.__get_user_prefix__(), name))
+            CommandHelper.execute('{}groupadd {}'.format(self.__get_user_prefix__(), name))
 
         def _try_add_user():
             # delete the home folder
@@ -393,7 +390,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
             create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(
                 self.__get_user_prefix__(), name)
-            OSHelper.execute(create_user)
+            CommandHelper.execute(create_user)
 
         # add group
         closure_try(_try_group, KeyError, _try_add_group)
@@ -407,7 +404,7 @@ class UnixLikeHandler(OSHandler, ABC):
         def _try_delete_user():
             import pwd
             pwd.getpwnam(name)
-            OSHelper.execute('{0}userdel {1}'.format(self.__get_user_prefix__(), name))
+            CommandHelper.execute('{0}userdel {1}'.format(self.__get_user_prefix__(), name))
 
             # delete if exists
             OSHelper.remove_if_exists('/var/lib/{}'.format(name))
@@ -415,7 +412,7 @@ class UnixLikeHandler(OSHandler, ABC):
         def _try_delete_group():
             import grp
             grp.getgrnam(name)
-            OSHelper.execute('{}groupdel {}'.format(self.__get_user_prefix__(), name))
+            CommandHelper.execute('{}groupdel {}'.format(self.__get_user_prefix__(), name))
 
         def _do_nothing():
             pass
@@ -468,11 +465,11 @@ class UnixLikeHandler(OSHandler, ABC):
 
     def __download_and_place_v2ray__(self, version, filename):
         meta_data = self.__get_meta_data__(version, filename)
-        full_path = '/tmp/v2rayHelper/{}'.format(filename)
+        full_path = '{}/v2rayHelper/{}'.format(OSHelper.get_temp_dir(), filename)
         Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
                    filename).start()
         self.__validate_download__(full_path, meta_data)
-        self.__extract_file__(full_path, '/tmp/v2rayHelper/')
+        self.__extract_file__(full_path, '{}/v2rayHelper/'.format(OSHelper.get_temp_dir()))
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
@@ -514,7 +511,7 @@ class UnixLikeHandler(OSHandler, ABC):
         if not os.path.exists(config_file):
             # download config file
             Downloader(self.__get_github_file_url__('misc/config.json'), 'config.json').start()
-            shutil.move('/tmp/v2rayHelper/config.json', config_file)
+            shutil.move('{}/v2rayHelper/config.json'.format(OSHelper.get_temp_dir()), config_file)
 
             # replace default value with randomly generated one
             new_token = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
@@ -598,8 +595,8 @@ class UnixLikeHandler(OSHandler, ABC):
 
 
 class LinuxHandler(UnixLikeHandler):
-    def __init__(self, arch):
-        super().__init__(arch, True)
+    def __init__(self):
+        super().__init__(True)
 
     @staticmethod
     def __get_conf_dir__():
@@ -613,23 +610,22 @@ class LinuxHandler(UnixLikeHandler):
     def __get_user_prefix__():
         return ''
 
-    @staticmethod
-    def __auto_start_status__(status):
+    def __auto_start_status__(self, status):
         """
         :param status: Bool
         :return:
         """
-        LinuxHandler.__service__('enable' if status else 'disable')
+        self.__service__('enable' if status else 'disable')
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute('systemctl {} v2ray'.format(action))
+        CommandHelper.execute('systemctl {} v2ray'.format(action))
 
     def __install_control_script__(self):
         # download systemd controll script
         Downloader(self.__get_github_file_url__('misc/v2ray.service'), 'v2ray.service').start()
         # move this service file to /etc/systemd/system/
-        shutil.move('/tmp/v2rayHelper/v2ray.service', '/etc/systemd/system/v2ray.service')
+        shutil.move('{}/v2rayHelper/v2ray.service'.format(OSHelper.get_temp_dir()), '/etc/systemd/system/v2ray.service')
 
     def install(self, version, filename):
         self.__base_install__(version, filename)
@@ -644,15 +640,14 @@ class LegacyLinuxHandler(LinuxHandler):
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute('service v2ray {}'.format(action))
+        CommandHelper.execute('service v2ray {}'.format(action))
 
 
 class MacOSHandler(UnixLikeHandler):
-    def __init__(self, arch):
-        super().__init__(arch)
-
+    def __post_init__(self):
+        super().__post_init__()
         # check if brew is installed
-        if not is_command_exists('brew'):
+        if not CommandHelper.exists('brew'):
             raise V2rayHelperException('This script requires Homebrew, please install Homebrew first')
 
     @staticmethod
@@ -668,12 +663,11 @@ class MacOSHandler(UnixLikeHandler):
         return ''
 
     @staticmethod
-    def __auto_start_status__(status):
-        pass
-
-    @staticmethod
     def __service__(action):
-        OSHelper.execute('brew services {} v2ray-core'.format(action))
+        CommandHelper.execute('brew services {} v2ray-core'.format(action))
+
+    def __auto_start_status__(self, status):
+        self.__service__('enable' if status else 'disable')
 
     def __install_control_script__(self):
         pass
@@ -681,15 +675,15 @@ class MacOSHandler(UnixLikeHandler):
     def install(self, version, filename):
         # Install the official tap
         logging.info('Install the official tap...')
-        OSHelper.execute('brew tap v2ray/v2ray')
+        CommandHelper.execute('brew tap v2ray/v2ray')
 
         # install v2ray
         logging.info('Install v2ray...')
-        OSHelper.execute('brew install v2ray-core')
+        CommandHelper.execute('brew install v2ray-core')
 
         # set auto-start
         logging.info('register v2ray to launch at login...')
-        OSHelper.execute('brew services start v2ray-core')
+        CommandHelper.execute('brew services start v2ray-core')
 
         # print message
         logging.info('Successfully installed v2ray')
@@ -698,15 +692,15 @@ class MacOSHandler(UnixLikeHandler):
         # upgrading v2ray
         logging.info('Upgrade v2ray...')
         try:
-            OSHelper.execute('brew upgrade v2ray-core')
+            CommandHelper.execute('brew upgrade v2ray-core')
         except subprocess.CalledProcessError:
             logging.error('Cannot upgrade v2ray, subprocess returned an error')
 
-    def remove(self, force=True):
-        # upgrading v2ray
+    def remove(self):
+        # remove v2ray
         logging.info('Uninstalling v2ray...')
         try:
-            OSHelper.execute('brew remove v2ray-core')
+            CommandHelper.execute('brew remove v2ray-core')
         except subprocess.CalledProcessError:
             logging.error('Cannot remove v2ray, subprocess returned an error')
 
@@ -714,13 +708,13 @@ class MacOSHandler(UnixLikeHandler):
         super().purge(confirmed)
         self.remove()
         logging.info('Untapping v2ray/v2ray')
-        OSHelper.execute('brew untap v2ray/v2ray')
+        CommandHelper.execute('brew untap v2ray/v2ray')
         logging.info('Remove ')
 
 
 class FreeBSDHandler(UnixLikeHandler):
-    def __init__(self, arch):
-        super().__init__(arch, True)
+    def __init__(self):
+        super().__init__(True)
 
     @staticmethod
     def __get_base_path__():
@@ -738,14 +732,13 @@ class FreeBSDHandler(UnixLikeHandler):
         Downloader(self.__get_github_file_url__('misc/v2ray.freebsd'), 'v2ray').start()
         path = '/usr/local/etc/rc.d/v2ray'
 
-        shutil.move('/tmp/v2rayHelper/v2ray', path)
+        shutil.move('{}/v2rayHelper/v2ray'.format(OSHelper.get_temp_dir()), path)
         os.chmod(path, 0o555)
 
         # create folder for pid file
         LinuxHelper.mkdir_chown('/var/run/v2ray/', 0o755, 'v2ray', 'v2ray')
 
-    @staticmethod
-    def __auto_start_status__(status):
+    def __auto_start_status__(self, status):
         rc_file_path = '/etc/rc.conf'
 
         if status:
@@ -766,15 +759,15 @@ class FreeBSDHandler(UnixLikeHandler):
 
     @staticmethod
     def __service__(action):
-        OSHelper.execute('service v2ray {}'.format(action))
+        CommandHelper.execute('service v2ray {}'.format(action))
 
     def install(self, version, filename):
         self.__base_install__(version, filename)
 
 
 class OpenBSDHandler(UnixLikeHandler):
-    def __init__(self, arch):
-        super().__init__(arch, True)
+    def __init__(self):
+        super().__init__(True)
 
     @staticmethod
     def __get_user_prefix__():
@@ -792,12 +785,11 @@ class OpenBSDHandler(UnixLikeHandler):
 
     @staticmethod
     # TODO
-    def __auto_start_status__(status):
+    def __service__(action):
         pass
 
-    @staticmethod
     # TODO
-    def __service__(action):
+    def __auto_start_status__(self, status):
         pass
 
     # TODO
@@ -809,8 +801,48 @@ class OpenBSDHandler(UnixLikeHandler):
         pass
 
 
+class WindowsHandler(OSHandler):
+    def __init__(self):
+        # super().__init__()
+        raise UnsupportedPlatformException()
+
+    def __post_init__(self):
+        import ctypes, sys
+        logging.debug('execute windows hanlder post-init')
+
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            # Re-run the program with admin rights
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
+        else:
+            super().__post_init__()
+
+    def install(self, version, filename):
+        pass
+
+    def upgrade(self, new_version, filename):
+        pass
+
+    def remove(self):
+        pass
+
+    def purge(self, confirmed):
+        pass
+
+    @staticmethod
+    def __get_conf_dir__():
+        pass
+
+    @staticmethod
+    def __get_base_path__():
+        pass
+
+    @staticmethod
+    def __place_file__(path_from):
+        pass
+
+
 class Downloader:
-    def __init__(self, url, file_name, path='/tmp/v2rayHelper'):
+    def __init__(self, url, file_name, dir='v2rayHelper'):
         # variable for report hook
         self.__last_reported = 0
         self.__last_displayed = 0
@@ -818,7 +850,7 @@ class Downloader:
 
         self.__url = url
         self.__file_name = file_name
-        self.__path = path
+        self.__path = '{}/{}'.format(OSHelper.get_temp_dir(), dir)
 
     @staticmethod
     def __format_size__(size, is_speed=False):
@@ -838,8 +870,8 @@ class Downloader:
     @staticmethod
     def __get_remain_tty_width__(occupied):
         _width = 0
-        if is_command_exists('stty'):
-            _width = int(OSHelper.execute('stty size').split()[1])
+        if CommandHelper.exists('stty'):
+            _width = int(CommandHelper.execute('stty size').split()[1])
 
         return _width - occupied if _width > occupied else 0
 
@@ -933,13 +965,17 @@ class OSUtil:
         return platform.system().lower()
 
     @staticmethod
-    def get_os_handler(__arch):
+    def get_os_handler():
         if OSUtil.is_freebsd():
-            return FreeBSDHandler(__arch)
+            return FreeBSDHandler()
         elif OSUtil.is_linux():
-            return LinuxHandler(__arch)
+            return LinuxHandler()
         elif OSUtil.is_mac():
-            return MacOSHandler(__arch)
+            return MacOSHandler()
+        elif OSUtil.is_windows():
+            return WindowsHandler()
+        else:
+            raise UnsupportedPlatformException()
 
     @staticmethod
     def is_freebsd():
@@ -961,16 +997,15 @@ class OSUtil:
     def is_mac():
         return OSUtil.__is('Darwin')
 
+    @staticmethod
+    def is_windows():
+        return OSUtil.__is('windows')
+
 
 class OSHelper:
     @staticmethod
-    def execute(command, encoding='utf-8'):
-        """
-        :param command: shell command
-        :param encoding: encoding, default utf-8
-        :return: execution result
-        """
-        return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
+    def get_temp_dir():
+        return tempfile.gettempdir().replace('\\', '/')
 
     @staticmethod
     def get_ip():
@@ -1007,19 +1042,19 @@ class OSHelper:
 
 class LinuxHelper(OSHelper):
     @staticmethod
-    def chown(_path, _user=None, _group=None):
-        if _user is None and _group is None:
-            raise RuntimeError
+    def chown(path, user=None, group=None):
+        if user is None and group is None:
+            raise RuntimeError('username and group cannot be empty at the same time.')
 
-        if _user is not None:
-            shutil.chown(_path, user=_user)
-        if _group is not None:
-            shutil.chown(_path, group=_group)
+        if user is not None:
+            shutil.chown(path, user=user)
+        if group is not None:
+            shutil.chown(path, group=group)
 
     @staticmethod
-    def mkdir_chown(_path, _perm=0o755, _user=None, _group=None):
-        OSHelper.mkdir(_path, _perm)
-        LinuxHelper.chown(_path, _user, _group)
+    def mkdir_chown(path, perm=0o755, user=None, group=None):
+        OSHelper.mkdir(path, perm)
+        LinuxHelper.chown(path, user, group)
 
     @staticmethod
     def is_systemd():
@@ -1045,6 +1080,42 @@ class FileHelper:
                 print(line, end='')
 
 
+class CommandHelper:
+    @staticmethod
+    def execute(command, encoding='utf-8'):
+        """
+        :param command: shell command
+        :param encoding: encoding, default utf-8
+        :return: execution result
+        """
+        return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
+
+    @staticmethod
+    def exists(command):
+        def _try():
+            CommandHelper.execute('type {}'.format(command))
+            return True
+
+        def _except():
+            return False
+
+        return closure_try(_try, subprocess.CalledProcessError, _except)
+
+    @staticmethod
+    def which_exists(_commands):
+        if is_collection(_commands):
+            for command in _commands:
+                if CommandHelper.exists(command):
+                    return command
+            return None
+        else:
+            raise TypeError
+
+
+def is_collection(_arg):
+    return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
+
+
 def signal_handler(signal_number):
     """
     from http://code.activestate.com/recipes/410666-signal-handler-decorator/
@@ -1067,31 +1138,6 @@ def closure_try(__try, __except, __on_except):
         return __try()
     except __except:
         return __on_except()
-
-
-def is_command_exists(_command):
-    def _try():
-        OSHelper.execute('type {}'.format(_command))
-        return True
-
-    def _except():
-        return False
-
-    return closure_try(_try, subprocess.CalledProcessError, _except)
-
-
-def which_command_exists(_commands):
-    if is_collection(_commands):
-        for command in _commands:
-            if is_command_exists(command):
-                return command
-        return None
-    else:
-        raise TypeError
-
-
-def is_collection(_arg):
-    return True if hasattr(_arg, '__iter__') and not isinstance(_arg, (str, bytes)) else False
 
 
 def get_args():

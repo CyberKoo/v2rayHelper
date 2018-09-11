@@ -93,11 +93,11 @@ class V2rayAPI:
             raise DownloadException('Unable to fetch data from API')
 
     def search(self, __arch_num, __machine):
-        if OSUtil.get_name() == 'darwin':
+        if OSHelper.get_name() == 'darwin':
             return ''
 
         for assets in self.__json['assets']:
-            if assets['name'].find('{}-{}.zip'.format(OSUtil.get_name(), __arch_num)) != -1:
+            if assets['name'].find('{}-{}.zip'.format(OSHelper.get_name(), __arch_num)) != -1:
                 return assets['name']
 
         raise UnsupportedPlatformException()
@@ -118,8 +118,8 @@ class OSHandler(ABC):
         logging.debug('executing os handler post_init function')
 
         # clean-up and create temp folder
-        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
-        OSHelper.mkdir('{}/v2rayHelper'.format(OSHelper.get_temp_dir()), 0o644)
+        OSHelper.remove_if_exists(OSHelper.get_temp())
+        OSHelper.mkdir(OSHelper.get_temp(), 0o644)
 
     @staticmethod
     @abstractmethod
@@ -138,7 +138,7 @@ class OSHandler(ABC):
     @staticmethod
     def __get_meta_data__(version, file_name):
         url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
-        full_path = '{}/v2rayHelper/metadata.txt'.format(OSHelper.get_temp_dir())
+        full_path = OSHelper.get_temp(file='metadata.txt')
         Downloader(url, 'metadata.txt').start()
 
         result = []
@@ -344,11 +344,11 @@ class UnixLikeHandler(OSHandler, ABC):
 
     def __download_and_place_v2ray__(self, version, filename):
         meta_data = self.__get_meta_data__(version, filename)
-        full_path = '{}/v2rayHelper/{}'.format(OSHelper.get_temp_dir(), filename)
+        full_path = OSHelper.get_temp(file=filename)
         Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
                    filename).start()
         self.__validate_download__(full_path, meta_data)
-        self.__extract_file__(full_path, '{}/v2rayHelper/'.format(OSHelper.get_temp_dir()))
+        self.__extract_file__(full_path, OSHelper.get_temp())
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
@@ -390,7 +390,7 @@ class UnixLikeHandler(OSHandler, ABC):
         if not os.path.exists(config_file):
             # download config file
             Downloader(self.__get_github_file_url__('misc/config.json'), 'config.json').start()
-            shutil.move('{}/v2rayHelper/config.json'.format(OSHelper.get_temp_dir()), config_file)
+            shutil.move(OSHelper.get_temp(file='config.json'), config_file)
 
             # replace default value with randomly generated one
             new_token = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
@@ -508,7 +508,7 @@ class LinuxHandler(UnixLikeHandler):
         # download systemd controll script
         Downloader(self.__get_github_file_url__('misc/v2ray.service'), 'v2ray.service').start()
         # move this service file to /etc/systemd/system/
-        shutil.move('{}/v2rayHelper/v2ray.service'.format(OSHelper.get_temp_dir()), '/etc/systemd/system/v2ray.service')
+        shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
 
     def install(self, version, filename):
         self.__base_install__(version, filename)
@@ -626,7 +626,7 @@ class FreeBSDHandler(UnixLikeHandler):
         Downloader(self.__get_github_file_url__('misc/v2ray.freebsd'), 'v2ray').start()
         path = '/usr/local/etc/rc.d/v2ray'
 
-        shutil.move('{}/v2rayHelper/v2ray'.format(OSHelper.get_temp_dir()), path)
+        shutil.move(OSHelper.get_temp(path=['v2ray']), path)
         os.chmod(path, 0o555)
 
         # create folder for pid file
@@ -744,7 +744,7 @@ class WindowsHandler(OSHandler):
 
 
 class Downloader:
-    def __init__(self, url, file_name, dir='v2rayHelper'):
+    def __init__(self, url, file_name):
         # variable for report hook
         self.__last_reported = 0
         self.__last_displayed = 0
@@ -752,7 +752,7 @@ class Downloader:
 
         self.__url = url
         self.__file_name = file_name
-        self.__path = '{}/{}'.format(OSHelper.get_temp_dir(), dir)
+        self.__path = OSHelper.get_temp()
 
     @staticmethod
     def __format_size__(size, is_speed=False):
@@ -854,47 +854,19 @@ class Downloader:
         os.rename(temp_full_path, full_path)
 
 
-class OSUtil:
-    @staticmethod
-    def __is(os_name):
-        if is_collection(os_name):
-            return True if OSUtil.get_name() in [x.lower() for x in os_name] else False
-        else:
-            return OSUtil.get_name() == os_name.lower()
-
+class OSHelper:
     @staticmethod
     def get_name():
         return platform.system().lower()
 
     @staticmethod
-    def is_freebsd():
-        return OSUtil.__is('freebsd')
+    def get_temp(base_dir='v2rayHelper', path=None, file=''):
+        full_path = ''
+        if path is not None:
+            full_path = '/'.join(path)
 
-    @staticmethod
-    def is_openbsd():
-        return OSUtil.__is('openbsd')
-
-    @staticmethod
-    def is_netbsd():
-        return OSUtil.__is('netbsd')
-
-    @staticmethod
-    def is_linux():
-        return OSUtil.__is('linux')
-
-    @staticmethod
-    def is_mac():
-        return OSUtil.__is('Darwin')
-
-    @staticmethod
-    def is_windows():
-        return OSUtil.__is('windows')
-
-
-class OSHelper:
-    @staticmethod
-    def get_temp_dir():
-        return tempfile.gettempdir().replace('\\', '/')
+        return '{}/{}/{}/{}'.format(tempfile.gettempdir().replace('\\', '/'), base_dir, full_path, file)\
+            .replace('//', '/')
 
     @staticmethod
     def get_ip():
@@ -1023,9 +995,11 @@ class V2rayHelper:
     @staticmethod
     @atexit.register
     def __cleanup__():
-        logging.debug('clean-up')
+        logging.debug('Clean-up')
+        logging.debug('Temp dir: {}'.format(OSHelper.get_temp()))
+
         # delete temp folder
-        OSHelper.remove_if_exists('{}/v2rayHelper'.format(OSHelper.get_temp_dir()))
+        OSHelper.remove_if_exists(OSHelper.get_temp())
 
     @staticmethod
     def __is_v2ray_installed__(installed_raise_error=None, not_installed_raise_error=None):
@@ -1053,7 +1027,7 @@ class V2rayHelper:
         cls = self.__get_all_subclasses__(OSHandler)
 
         for c in cls:
-            if OSUtil.get_name() in c.__target_os__():
+            if OSHelper.get_name() in c.__target_os__():
                 return c
 
         raise UnsupportedPlatformException()
@@ -1099,7 +1073,7 @@ class V2rayHelper:
 
             # display operating system information
             logging.info('Operating system: {}-{} ({})'.format(
-                OSUtil.get_name(),
+                OSHelper.get_name(),
                 self.__arch_num,
                 self.__machine)
             )

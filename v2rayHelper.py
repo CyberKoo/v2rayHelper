@@ -85,16 +85,6 @@ class OSHandler(ABC):
             raise MetaFetchException('Unable to fetch the Metadata', e)
 
     @staticmethod
-    def _get_extracted_path(filename, version):
-        split_folder = filename[0:-4].split('-')
-        split_folder.insert(1, version)
-        path = '-'.join(split_folder)
-
-        logging.debug('file extracted to %s', path)
-
-        return path
-
-    @staticmethod
     def _sha1_file(file_name):
         sha1sum = hashlib.sha1()
         with open(file_name, 'rb') as source:
@@ -109,6 +99,7 @@ class OSHandler(ABC):
     def _extract_file(path, output):
         with zipfile.ZipFile(path, 'r') as zip_ref:
             zip_ref.extractall(output)
+            return zip_ref.namelist()[0]
 
     @staticmethod
     @abstractmethod
@@ -243,13 +234,14 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.error('%s, validation process is skipped', ex)
 
         # extract zip file
-        self._extract_file(full_path, OSHelper.get_temp())
+        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
+        logging.debug('file extracted to %s', extracted_dir)
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
 
         # place v2ray to /opt/v2ray
-        self._place_file(self._get_extracted_path(full_path, version))
+        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
 
         # create soft link, for *nix
         for file in self._executables:
@@ -315,13 +307,14 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.error('%s, validation process is skipped', ex)
 
         # extract zip file
-        self._extract_file(full_path, OSHelper.get_temp())
+        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
+        logging.debug('file extracted to %s', extracted_dir)
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
 
         # place v2ray to /opt/v2ray
-        self._place_file(self._get_extracted_path(full_path, version))
+        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
 
         # restart v2ray
         self._service('restart')
@@ -945,13 +938,30 @@ class V2RayAPI:
         except URLError:
             raise V2rayHelperException('Unable to fetch data from API')
 
-    def search(self, __arch_num, __machine):
+    @staticmethod
+    def _get_arch(machine):
+        supported = {
+            '32': ['i386'],
+            '64': ['x86_64', 'amd64'],
+            'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
+            'arm64': ['aarch64']
+        }
+
+        # make it to lower case to maintain the compatibility across all platforms
+        for key in supported:
+            if machine.lower() in supported[key]:
+                return key
+
+        raise UnsupportedPlatformException()
+
+    def search(self, _machine):
         # skip macos
         if OSHelper.get_name() == 'darwin':
             return ''
 
+        search_name = '{}-{}.zip'.format(OSHelper.get_name(), self._get_arch(_machine))
         for assets in self._json['assets']:
-            if assets['name'].find('{}-{}.zip'.format(OSHelper.get_name(), __arch_num)) != -1:
+            if assets['name'].find(search_name) != -1:
                 return assets['name']
 
         raise UnsupportedPlatformException()
@@ -1001,36 +1011,13 @@ class V2rayHelper:
         return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
     def _get_os_handler(self):
-        supported = {
-            'pc': ['X86_64', 'I386', 'AMD64'],
-            'arm': {
-                'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
-                'arm64': ['aarch64']
-            }
-        }
+        # find the correlated OSHandler
+        for cls in self._get_all_subclasses(OSHandler):
+            logging.debug('OSHandler: %s, target os: %s', cls.__name__, cls._target_os())
+            if OSHelper.get_name() in cls._target_os():
+                logging.debug('Found OSHandler: %s, returning', cls.__name__)
 
-        # validate architecture
-        valid_architecture = False
-        logging.debug('I\'m going to check the OS\'s architecture.')
-        # make it to upper case to maintain the compatibility across all platforms
-        if self._machine.upper() not in supported['pc']:
-            for key in supported['arm']:
-                if self._machine.lower() in supported['arm'][key]:
-                    self._arch = key
-                    valid_architecture = True
-        else:
-            valid_architecture = True
-
-        if valid_architecture:
-            logging.debug('This computer running a %s %s', self._arch, OSHelper.get_name())
-
-            # find the correlated OSHandler
-            for cls in self._get_all_subclasses(OSHandler):
-                logging.debug('OSHandler: %s, target os: %s', cls.__name__, cls._target_os())
-                if OSHelper.get_name() in cls._target_os():
-                    logging.debug('Found OSHandler: %s, returning', cls.__name__)
-
-                    return cls
+                return cls
 
         raise UnsupportedPlatformException()
 
@@ -1041,7 +1028,7 @@ class V2rayHelper:
 
         # get information from API
         self._api.fetch()
-        file_name = self._api.search(self._arch_num, self._machine)
+        file_name = self._api.search(self._machine)
         latest_version = self._api.get_latest_version()
 
         # display information obtained from api

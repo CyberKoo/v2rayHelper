@@ -775,7 +775,7 @@ class OSHelper:
     def remove_if_exists(path):
         logging.debug('trying to delete %s', path)
 
-        if os.path.exists(path):
+        if os.path.exists(path) or os.path.islink(path):
             if os.path.isdir(path):
                 logging.debug('%s is a director, deleted', path)
                 shutil.rmtree(path)

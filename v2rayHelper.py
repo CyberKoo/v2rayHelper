@@ -475,8 +475,14 @@ class MacOSHandler(UnixLikeHandler):
         logging.info('Upgrade v2ray...')
         try:
             CommandHelper.execute('brew upgrade v2ray-core')
+
+            logging.info('V2ray Upgraded')
+
+            logging.info('Restart v2ray...')
+
+            self._service('restart')
         except subprocess.CalledProcessError:
-            logging.error('Cannot upgrade v2ray, subprocess returned an error')
+            raise V2rayHelperException('Cannot upgrade v2ray, subprocess returned an error')
 
     def remove(self):
         # remove v2ray

@@ -120,6 +120,11 @@ class OSHandler(ABC):
     def _place_file(self, path_from):
         pass
 
+    @staticmethod
+    @abstractmethod
+    def get_v2ray_version():
+        pass
+
     @abstractmethod
     def install(self, version, filename):
         pass
@@ -220,6 +225,16 @@ class UnixLikeHandler(OSHandler, ABC):
                 else:
                     logging.debug('set file permission %s to %d', os.path.join(root, file), 755)
                     os.chmod(os.path.join(root, file), 0o777)
+
+    @staticmethod
+    def get_v2ray_version():
+        def _try():
+            return CommandHelper.execute('v2ray --version').split()[1]
+
+        def _except():
+            return None
+
+        return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
     def install(self, version, filename):
         # download zip file
@@ -604,9 +619,9 @@ class WindowsHandler(OSHandler):
         import ctypes, sys
         if not ctypes.windll.shell32.IsUserAnAdmin():
             # Re-run the program with admin rights
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 1)
+            ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, __file__, None, 1)
         else:
-            super()._post_init()
+            super(WindowsHandler, self)._post_init()
 
     @staticmethod
     def _target_os():
@@ -622,6 +637,16 @@ class WindowsHandler(OSHandler):
 
     def _place_file(self, path_from):
         pass
+
+    @staticmethod
+    def get_v2ray_version():
+        def _try():
+            return CommandHelper.execute('c:/v2ray/v2ray.exe --version').split()[1]
+
+        def _except():
+            return None
+
+        return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
     def install(self, version, filename):
         pass
@@ -1004,16 +1029,6 @@ class V2rayHelper:
         # delete temp folder
         OSHelper.remove_if_exists(OSHelper.get_temp())
 
-    @staticmethod
-    def _get_v2ray_version():
-        def _try():
-            return CommandHelper.execute('v2ray --version').split()[1]
-
-        def _except():
-            return None
-
-        return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
-
     def _get_os_handler(self):
         # find the correlated OSHandler
         for cls in self._get_all_subclasses(OSHandler):
@@ -1028,7 +1043,7 @@ class V2rayHelper:
     def run(self, args):
         # make sure init function is executed
         handler = (self._get_os_handler())()
-        version = self._get_v2ray_version()
+        version = handler.get_v2ray_version()
 
         # get information from API
         self._api.fetch()

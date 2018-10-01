@@ -601,8 +601,6 @@ class WindowsHandler(OSHandler):
         super(WindowsHandler, self)._post_init()
         logging.debug('execute windows handler post_init')
 
-        raise UnsupportedPlatformException()
-
         import ctypes, sys
         if not ctypes.windll.shell32.IsUserAnAdmin():
             # Re-run the program with admin rights

@@ -38,6 +38,35 @@ class MetaFetchException(V2rayHelperException):
     pass
 
 
+class Decorators:
+    @staticmethod
+    def legacy_linux_warning(func):
+        def wrapper(arg):
+            if LinuxHandler._is_legacy_os():
+                logging.warning('%s cannot be used in legacy linux', func.__name__)
+            else:
+                func(arg)
+
+        return wrapper
+
+    @staticmethod
+    def signal_handler(signal_number):
+        """
+        from http://code.activestate.com/recipes/410666-signal-handler-decorator/
+
+        A decorator to set the specified function as handler for a signal.
+        This function is the 'outer' decorator, called with only the (non-function)
+        arguments
+        """
+
+        # create the 'real' decorator which takes only a function as an argument
+        def __decorator(_function):
+            signal.signal(signal_number, _function)
+            return _function
+
+        return __decorator
+
+
 class OSHandler(ABC):
     def __init__(self, privileged=False):
         if privileged:
@@ -47,8 +76,6 @@ class OSHandler(ABC):
         self._post_init()
 
     def _post_init(self):
-        logging.debug('executing base class post_init')
-
         # clean-up and create temp folder
         OSHelper.remove_if_exists(OSHelper.get_temp())
         OSHelper.mkdir(OSHelper.get_temp(), 0o644)
@@ -113,7 +140,7 @@ class OSHandler(ABC):
                 raise V2rayHelperException('Failed to validate the {}, expected {}, got {}.'
                                            .format(actual[i]['label'], _, actual[i]['value']))
             else:
-                logging.debug('expected %s %s, actual %s', actual[i]['label'], _, actual[i]['value'])
+                logging.debug('Expected %s %s, actual %s', actual[i]['label'], _, actual[i]['value'])
 
         logging.info('File %s has passed the validation.', os.path.basename(filename))
 
@@ -132,7 +159,7 @@ class OSHandler(ABC):
 
         # extract zip file
         extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
-        logging.debug('file extracted to %s', extracted_dir)
+        logging.debug('File extracted to %s', extracted_dir)
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
@@ -242,20 +269,20 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # move downloaded file to path_to
         shutil.move(path_from, self._get_target_path())
-        logging.debug('move %s to %s', path_from, self._get_target_path())
+        logging.debug('Move %s to %s', path_from, self._get_target_path())
 
         # change file and dir permission
         logging.debug('Change permission for dir %s', self._get_target_path())
         for root, dirs, files in os.walk(self._get_target_path()):
             for dir_ in dirs:
-                logging.debug('set dir permission %s to %d', os.path.join(root, dir_), 755)
+                logging.debug('Set dir permission %s to %d', os.path.join(root, dir_), 755)
                 os.chmod(os.path.join(root, dir_), 0o755)
             for file in files:
                 if file not in self._executables:
-                    logging.debug('set file permission %s to %d', os.path.join(root, file), 644)
+                    logging.debug('Set file permission %s to %d', os.path.join(root, file), 644)
                     os.chmod(os.path.join(root, file), 0o644)
                 else:
-                    logging.debug('set file permission %s to %d', os.path.join(root, file), 755)
+                    logging.debug('Set file permission %s to %d', os.path.join(root, file), 755)
                     os.chmod(os.path.join(root, file), 0o777)
 
     @staticmethod
@@ -409,16 +436,16 @@ class LinuxHandler(UnixLikeHandler):
         self._service('enable' if status else 'disable')
 
     @staticmethod
+    @Decorators.legacy_linux_warning
     def _service(action):
-        if not LinuxHandler._is_legacy_os():
-            CommandHelper.execute('systemctl {} v2ray'.format(action))
+        CommandHelper.execute('systemctl {} v2ray'.format(action))
 
+    @Decorators.legacy_linux_warning
     def _install_control_script(self):
-        if not self._is_legacy_os():
-            # download systemd control script
-            Downloader(self._get_github_url('misc/v2ray.service'), 'v2ray.service').start()
-            # move this service file to /etc/systemd/system/
-            shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
+        # download systemd control script
+        Downloader(self._get_github_url('misc/v2ray.service'), 'v2ray.service').start()
+        # move this service file to /etc/systemd/system/
+        shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
 
 
 class MacOSHandler(UnixLikeHandler):
@@ -850,14 +877,13 @@ class OSHelper:
 
     @staticmethod
     def remove_if_exists(path):
-        logging.debug('trying to delete %s', path)
 
         if os.path.exists(path) or os.path.islink(path):
             if os.path.isdir(path):
-                logging.debug('%s is a director, deleted', path)
+                logging.debug('Trying to delete directory %s', path)
                 shutil.rmtree(path)
             else:
-                logging.debug('%s is a regular file or symbol link, deleted', path)
+                logging.debug('Trying to delete file %s', path)
                 os.unlink(path)
         else:
             logging.debug('%s does\'t exists, ignore', path)
@@ -866,23 +892,16 @@ class OSHelper:
     def mkdir(path, permission=0o755):
         if not os.path.exists(path) and not os.path.islink(path):
             os.mkdir(path, permission)
-            logging.debug('directory %s created with permission %o', path, permission)
+            logging.debug('Directory %s created with permission %o', path, permission)
         else:
             logging.debug('mkdir: cannot create directory "%s": File exists', path)
 
 
 class UnixLikeHelper(OSHelper):
     @staticmethod
-    def chown(path, user=None, group=None):
-        if user is None and group is None:
-            raise V2rayHelperException('username and group cannot be empty at the same time.')
-
-        if user is not None:
-            shutil.chown(path, user=user)
-            logging.debug('the owner of directory %s change to %s', path, user)
-        if group is not None:
-            shutil.chown(path, group=group)
-            logging.debug('the owner of directory %s change to %s:%s', path, user, group)
+    def chown(path, user, group):
+        shutil.chown(path, user=user, group=group)
+        logging.debug('The owner of %s change to %s:%s', path, user, group)
 
     @staticmethod
     def mkdir_chown(path, perm=0o755, user=None, group=None):
@@ -1028,31 +1047,30 @@ class V2RayAPI:
 
     @staticmethod
     def _get_arch(machine):
-        supported = {
+        arch_list = {
             '32': ['i386'],
             '64': ['x86_64', 'amd64'],
             'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
             'arm64': ['aarch64']
         }
 
-        # make it to lower case to maintain the compatibility across all platforms
-        for key in supported:
-            if machine.lower() in supported[key]:
-                return key
-
-        raise UnsupportedPlatformException()
+        try:
+            # make it to lower case to maintain the compatibility across all platforms
+            return next(k for k, v in arch_list.items() if machine.lower() in v)
+        except StopIteration:
+            raise UnsupportedPlatformException()
 
     def search(self, _machine):
-        # skip macos
-        if OSHelper.get_name() == 'darwin':
+        # skip list
+        skip_list = ['darwin']
+        if OSHelper.get_name() in skip_list:
             return ''
 
-        search_name = '{}-{}.zip'.format(OSHelper.get_name(), self._get_arch(_machine))
-        for assets in self._json['assets']:
-            if assets['name'].find(search_name) != -1:
-                return assets['name']
-
-        raise UnsupportedPlatformException()
+        try:
+            search_name = '{}-{}.zip'.format(OSHelper.get_name(), self._get_arch(_machine))
+            return next(_['name'] for _ in self._json['assets'] if _['name'].find(search_name) != -1)
+        except StopIteration:
+            raise UnsupportedPlatformException()
 
     def get_latest_version(self):
         return self._latest_version
@@ -1081,11 +1099,11 @@ class V2rayHelper:
         return all_subclasses
 
     def _get_os_handler(self):
+        logging.debug('Finding the OSHandler...')
         # find the correlated OSHandler
         for cls in self._get_all_subclasses(OSHandler):
-            logging.debug('OSHandler: %s, target os: %s', cls.__name__, cls._target_os())
             if OSHelper.get_name() in cls._target_os():
-                logging.debug('Found OSHandler: %s, returning', cls.__name__)
+                logging.debug('Best match: %s, returning', cls.__name__)
 
                 return cls
 
@@ -1106,41 +1124,44 @@ class V2rayHelper:
 
         # display operating system information
         logging.info('Operating system: %s-%s (%s)', OSHelper.get_name().capitalize(), self._arch_num, self._machine)
-        logging.info('Currently installed version: %s...', version)
+        logging.info('Currently installed V2Ray version: %s...', version)
 
-        # execute
-        if args.install:
-            if args.force is False:
-                if version is not None:
-                    raise V2rayHelperException('v2ray is already installed, use --force to reinstall.')
+        # execute selected action
+        def executor():
+            if args.install:
+                if args.force is False and version is not None:
+                    raise V2rayHelperException('V2Ray is already installed, use --force to reinstall.')
 
-            handler.install(latest_version, file_name)
-        elif args.upgrade:
-            if version is None:
-                raise V2rayHelperException('v2ray must be installed before you can upgrade it.')
-
-            if version != latest_version or args.force:
-                if args.force:
-                    logging.info('You already installed the latest version, forced to upgrade')
-
-                    handler.upgrade(latest_version, file_name)
-            else:
-                raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
-        elif args.remove:
-            if args.force is False:
-                if version is None:
-                    raise V2rayHelperException('v2ray is not installed, you cannot uninstall it.')
-            handler.remove()
-        elif args.purge:
-            handler.purge(args.sure)
-        elif args.auto:
-            if version is None:
                 handler.install(latest_version, file_name)
-            else:
-                if version != latest_version:
+            elif args.upgrade:
+                if version is None:
+                    raise V2rayHelperException('V2Ray must be installed before you can upgrade it.')
+
+                if version != latest_version or args.force:
                     handler.upgrade(latest_version, file_name)
                 else:
                     raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
+            elif args.remove:
+                if version is None:
+                    raise V2rayHelperException('V2Ray is not installed, you cannot uninstall it.')
+                handler.remove()
+            elif args.purge:
+                handler.purge(args.sure)
+            elif args.auto:
+                logging.debug('It seems you did not specify an action, fall back to the auto section')
+
+                # disable auto
+                args.auto = False
+
+                # set flag
+                args.install = True if version is None else False
+                args.upgrade = False if version is None else True
+
+                # forward back to executor function
+                executor()
+
+        # execute the executor
+        executor()
 
 
 class Utils:
@@ -1148,23 +1169,6 @@ class Utils:
     def grouper(iterable, n, fillvalue=None):
         args = [iter(iterable)] * n
         return zip_longest(*args, fillvalue=fillvalue)
-
-    @staticmethod
-    def signal_handler(signal_number):
-        """
-        from http://code.activestate.com/recipes/410666-signal-handler-decorator/
-
-        A decorator to set the specified function as handler for a signal.
-        This function is the 'outer' decorator, called with only the (non-function)
-        arguments
-        """
-
-        # create the 'real' decorator which takes only a function as an argument
-        def __decorator(_function):
-            signal.signal(signal_number, _function)
-            return _function
-
-        return __decorator
 
     @staticmethod
     def is_collection(arg):
@@ -1182,21 +1186,28 @@ class Utils:
 
     @staticmethod
     def get_args():
-        parser = argparse.ArgumentParser()
-        group = parser.add_mutually_exclusive_group()
-        group.add_argument('-A', '--auto', action='store_true', default=True, help='automatic mode')
-        group.add_argument('-I', '--install', action='store_true', help='install v2ray')
-        group.add_argument('-U', '--upgrade', action='store_true', help='upgrade v2ray')
-        group.add_argument('-R', '--remove', action='store_true', help='remove v2ray')
-        group.add_argument('-P', '--purge', action='store_true', help='remove v2ray and configure file')
-        parser.add_argument('--sure', action='store_true', help='confirm action')
-        parser.add_argument('--force', action='store_true', help='force to do the selected action')
-        parser.add_argument('--debug', action='store_true', help='show all logs')
+        root = argparse.ArgumentParser()
 
-        return parser.parse_args()
+        group = root.add_mutually_exclusive_group()
+        group.add_argument('--auto', action='store_true', default=True, help='automatic mode')
+
+        group1 = group.add_argument_group()
+        group3 = group1.add_mutually_exclusive_group()
+        group3.add_argument('--install', action='store_true', help='install v2ray')
+        group3.add_argument('--upgrade', action='store_true', help='upgrade v2ray')
+        group1.add_argument('--force', action='store_true', help='force to install or upgrade')
+        group.add_argument('--remove', action='store_true', help='remove v2ray')
+
+        group3 = group.add_argument_group()
+        group3.add_argument('--purge', action='store_true', help='remove v2ray and delete all configure files')
+        group3.add_argument('--sure', action='store_true', help='confirm action')
+
+        root.add_argument('--debug', action='store_true', help='show all logs')
+
+        return root.parse_args()
 
 
-@Utils.signal_handler(signal.SIGINT)
+@Decorators.signal_handler(signal.SIGINT)
 def _sigint_handler(signum, frame):
     logging.warning('Quitting...')
     exit(signum)

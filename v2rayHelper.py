@@ -85,21 +85,54 @@ class OSHandler(ABC):
             raise MetaFetchException('Unable to fetch the Metadata', e)
 
     @staticmethod
-    def _sha1_file(file_name):
-        sha1sum = hashlib.sha1()
-        with open(file_name, 'rb') as source:
-            block = source.read(65536)
-            while len(block) != 0:
-                sha1sum.update(block)
-                block = source.read(65536)
-
-        return sha1sum.hexdigest()
-
-    @staticmethod
     def _extract_file(path, output):
         with zipfile.ZipFile(path, 'r') as zip_ref:
             zip_ref.extractall(output)
             return zip_ref.namelist()[0]
+
+    @staticmethod
+    def _validate_download(filename, metadata):
+        if len(metadata) != 0:
+            # validate size
+            file_size = os.path.getsize(filename)
+            sha1 = FileHelper.sha1_file(filename)
+
+            if int(metadata[0]) != file_size:
+                raise V2rayHelperException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
+
+            if metadata[1] != sha1:
+                raise V2rayHelperException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
+
+            logging.debug('expected size %d, actual size %d', int(metadata[0]), file_size)
+            logging.debug('expected sha1 %s, actual sha1 %s', metadata[1], sha1)
+
+            logging.info('File %s has passed the validation.', os.path.basename(filename))
+        else:
+            raise V2rayHelperException('Failed to perform validation, invalid metadata')
+
+    def _download_and_install(self, version, filename):
+        # get temp full path
+        full_path = OSHelper.get_temp(file=filename)
+
+        # download file
+        Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
+                   filename).start()
+
+        # validate downloaded file with metadata
+        try:
+            self._validate_download(full_path, self._get_metadata(version, filename))
+        except MetaFetchException as ex:
+            logging.error('%s, validation process is skipped', ex)
+
+        # extract zip file
+        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
+        logging.debug('file extracted to %s', extracted_dir)
+
+        # remove zip file
+        OSHelper.remove_if_exists(full_path)
+
+        # place v2ray to target_path
+        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
 
     @staticmethod
     @abstractmethod
@@ -113,7 +146,12 @@ class OSHandler(ABC):
 
     @staticmethod
     @abstractmethod
-    def _get_base_path():
+    def _get_os_base_path():
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_target_path():
         pass
 
     @abstractmethod
@@ -170,6 +208,18 @@ class UnixLikeHandler(OSHandler, ABC):
         pass
 
     @staticmethod
+    def _get_user_prefix():
+        return ''
+
+    @staticmethod
+    def _add_user_command():
+        return None
+
+    @staticmethod
+    def _get_target_path():
+        return '/opt/v2ray/'
+
+    @staticmethod
     def _relaunch_with_root():
         # ask for root privileges
         logging.info('Re-lunching with root privileges...')
@@ -183,41 +233,20 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.debug('Oops, neither sudo nor su is found on this machine, throw an exception')
             raise V2rayHelperException('Sorry, cannot gain root privilege.')
 
-    def _validate_download(self, filename, metadata):
-        if len(metadata) != 0:
-            # validate size
-            file_size = os.path.getsize(filename)
-            sha1 = self._sha1_file(filename)
-
-            if int(metadata[0]) != file_size:
-                raise V2rayHelperException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
-
-            if metadata[1] != sha1:
-                raise V2rayHelperException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
-
-            logging.debug('actual size %d, expected size %d', file_size, int(metadata[0]))
-            logging.debug('actual sha1 %s, expected sha1 %s', sha1, metadata[1])
-
-            logging.info('File %s has passed the validation.', os.path.basename(filename))
-        else:
-            raise V2rayHelperException('Failed to perform validation, invalid metadata')
-
     def _place_file(self, path_from):
-        path_to = '/opt/v2ray/'
-
         # remove old file
-        OSHelper.remove_if_exists(path_to)
+        OSHelper.remove_if_exists(self._get_target_path())
 
         # move downloaded file to path_to
-        shutil.move(path_from, path_to)
-        logging.debug('move %s to %s', path_from, path_to)
+        shutil.move(path_from, self._get_target_path())
+        logging.debug('move %s to %s', path_from, self._get_target_path())
 
         # change file and dir permission
-        logging.debug('Change permission for dir %s', path_to)
-        for root, dirs, files in os.walk(path_to):
-            for _dir in dirs:
-                logging.debug('set dir permission %s to %d', os.path.join(root, _dir), 755)
-                os.chmod(os.path.join(root, _dir), 0o755)
+        logging.debug('Change permission for dir %s', self._get_target_path())
+        for root, dirs, files in os.walk(self._get_target_path()):
+            for dir_ in dirs:
+                logging.debug('set dir permission %s to %d', os.path.join(root, dir_), 755)
+                os.chmod(os.path.join(root, dir_), 0o755)
             for file in files:
                 if file not in self._executables:
                     logging.debug('set file permission %s to %d', os.path.join(root, file), 644)
@@ -237,30 +266,11 @@ class UnixLikeHandler(OSHandler, ABC):
         return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
     def install(self, version, filename):
-        # download zip file
-        full_path = OSHelper.get_temp(file=filename)
-        Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
-                   filename).start()
-
-        # validate downloaded file with metadata
-        try:
-            self._validate_download(full_path, self._get_metadata(version, filename))
-        except MetaFetchException as ex:
-            logging.error('%s, validation process is skipped', ex)
-
-        # extract zip file
-        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
-        logging.debug('file extracted to %s', extracted_dir)
-
-        # remove zip file
-        OSHelper.remove_if_exists(full_path)
-
-        # place v2ray to /opt/v2ray
-        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
+        self._download_and_install(version, filename)
 
         # create soft link, for *nix
         for file in self._executables:
-            symlink_path = '{}/{}'.format(self._get_base_path(), file)
+            symlink_path = '{}/{}'.format(self._get_os_base_path(), file)
 
             # delete the old symlink
             OSHelper.remove_if_exists(symlink_path)
@@ -310,26 +320,7 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.info('alterId: %d', 64)
 
     def upgrade(self, version, filename):
-        # download zip file
-        full_path = OSHelper.get_temp(file=filename)
-        Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
-                   filename).start()
-
-        # validate downloaded file with metadata
-        try:
-            self._validate_download(full_path, self._get_metadata(version, filename))
-        except MetaFetchException as ex:
-            logging.error('%s, validation process is skipped', ex)
-
-        # extract zip file
-        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
-        logging.debug('file extracted to %s', extracted_dir)
-
-        # remove zip file
-        OSHelper.remove_if_exists(full_path)
-
-        # place v2ray to /opt/v2ray
-        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
+        self._download_and_install(version, filename)
 
         # restart v2ray
         self._service('restart')
@@ -382,14 +373,6 @@ class UnixLikeHandler(OSHandler, ABC):
         logging.info('Deleting all other files')
         OSHelper.remove_if_exists('/etc/systemd/system/v2ray.service')
 
-    @staticmethod
-    def _get_user_prefix():
-        return ''
-
-    @staticmethod
-    def _add_user_command():
-        return None
-
 
 class LinuxHandler(UnixLikeHandler):
     def __init__(self):
@@ -404,7 +387,7 @@ class LinuxHandler(UnixLikeHandler):
         return '/etc/v2ray'
 
     @staticmethod
-    def _get_base_path():
+    def _get_os_base_path():
         return '/usr/bin'
 
     def _auto_start_set(self, status):
@@ -452,7 +435,7 @@ class MacOSHandler(UnixLikeHandler):
         pass
 
     @staticmethod
-    def _get_base_path():
+    def _get_os_base_path():
         pass
 
     @staticmethod
@@ -539,7 +522,7 @@ class BSDHandler(UnixLikeHandler, ABC):
                     file.truncate()
 
     @staticmethod
-    def _get_base_path():
+    def _get_os_base_path():
         return '/usr/local/bin'
 
 
@@ -628,20 +611,34 @@ class WindowsHandler(OSHandler):
         return ['windows']
 
     @staticmethod
-    def _get_conf_dir():
-        pass
+    def _get_target_path():
+        return 'C:/v2ray/'
 
     @staticmethod
-    def _get_base_path():
-        pass
+    def _get_conf_dir():
+        return '{}config'.format(WindowsHandler._get_target_path())
+
+    @staticmethod
+    # not applicable
+    def _get_os_base_path():
+        return ''
+
+    @staticmethod
+    def _get_binary_file_path():
+        return '{}bin'.format(WindowsHandler._get_target_path())
 
     def _place_file(self, path_from):
-        pass
+        # remove old file
+        OSHelper.remove_if_exists(self._get_binary_file_path())
+
+        # move downloaded file to path_to
+        shutil.move(path_from, self._get_binary_file_path())
+        logging.debug('move %s to %s', path_from, self._get_binary_file_path())
 
     @staticmethod
     def get_v2ray_version():
         def _try():
-            return CommandHelper.execute('c:/v2ray/v2ray.exe --version').split()[1]
+            return CommandHelper.execute('C:/v2ray/bin/v2ray.exe --version').split()[1]
 
         def _except():
             return None
@@ -649,10 +646,36 @@ class WindowsHandler(OSHandler):
         return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
     def install(self, version, filename):
-        pass
+        # create base dir
+        OSHelper.mkdir(self._get_target_path())
+
+        self._download_and_install(version, filename)
+
+        # download and place the default config file
+        conf_dir = self._get_conf_dir()
+
+        # create default configuration file path
+        OSHelper.mkdir(conf_dir, 0o755)
+        config_file = '{}/config.json'.format(conf_dir)
+        new_token = None
+
+        if not os.path.exists(config_file):
+            # download config file
+            Downloader(self._get_github_url('misc/config.json'), 'config.json').start()
+            shutil.move(OSHelper.get_temp(file='config.json'), config_file)
+
+            # replace default value with randomly generated one
+            new_token = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
+            FileHelper.replace('{}/config.json'.format(conf_dir), [
+                ['dbe16381-f905-4b88-946f-dfc21ed9be29', new_token[0]],
+                # ['0.0.0.0', str(get_ip())],
+                ['12345', new_token[1]]
+            ])
+        else:
+            logging.info('%s is already exists, skip installing config.json', config_file)
 
     def upgrade(self, version, filename):
-        pass
+        self._download_and_install(version, filename)
 
     def remove(self):
         pass
@@ -917,6 +940,17 @@ class FileHelper:
                     line = line.replace(replace[0], replace[1])
                 print(line, end='')
 
+    @staticmethod
+    def sha1_file(path):
+        sha1sum = hashlib.sha1()
+        with open(path, 'rb') as source:
+            block = source.read(65536)
+            while len(block) != 0:
+                sha1sum.update(block)
+                block = source.read(65536)
+
+        return sha1sum.hexdigest()
+
 
 class CommandHelper:
     @staticmethod
@@ -1051,15 +1085,10 @@ class V2rayHelper:
         latest_version = self._api.get_latest_version()
 
         # display information obtained from api
-        logging.info('Hi there, the latest version of v2ray is %s %s',
-                     latest_version, self._api.get_pre_release()
-                     )
+        logging.info('Hi there, the latest version of v2ray is %s %s', latest_version, self._api.get_pre_release())
 
         # display operating system information
-        logging.info('Operating system: %s-%s (%s)',
-                     OSHelper.get_name(), self._arch_num, self._machine
-                     )
-
+        logging.info('Operating system: %s-%s (%s)', OSHelper.get_name().capitalize(), self._arch_num, self._machine)
         logging.info('Currently installed version: %s...', version)
 
         # execute

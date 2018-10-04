@@ -378,6 +378,12 @@ class LinuxHandler(UnixLikeHandler):
     def __init__(self):
         super().__init__(True)
 
+    def _post_init(self):
+        super()._post_init()
+
+        if self._is_legacy_os():
+            logging.warning('You\'re running an outdated linux version, some operation will not be supported.')
+
     @staticmethod
     def _target_os():
         return ['linux']
@@ -390,6 +396,10 @@ class LinuxHandler(UnixLikeHandler):
     def _get_os_base_path():
         return '/usr/bin'
 
+    @staticmethod
+    def _is_legacy_os():
+        return not os.path.isdir('/run/systemd/system/')
+
     def _auto_start_set(self, status):
         """
         :param status: Bool
@@ -399,28 +409,15 @@ class LinuxHandler(UnixLikeHandler):
 
     @staticmethod
     def _service(action):
-        CommandHelper.execute('systemctl {} v2ray'.format(action))
+        if not LinuxHandler._is_legacy_os():
+            CommandHelper.execute('systemctl {} v2ray'.format(action))
 
     def _install_control_script(self):
-        # download systemd control script
-        Downloader(self._get_github_url('misc/v2ray.service'), 'v2ray.service').start()
-        # move this service file to /etc/systemd/system/
-        shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
-
-
-# TODO add legacy linux support
-class LegacyLinuxHandler(LinuxHandler):
-    """
-        for legacy linux which doesn't have systemd support, e.g Centos 6
-    """
-
-    @staticmethod
-    def _service(action):
-        CommandHelper.execute('service v2ray {}'.format(action))
-
-    @staticmethod
-    def _target_os():
-        return []
+        if not self._is_legacy_os():
+            # download systemd control script
+            Downloader(self._get_github_url('misc/v2ray.service'), 'v2ray.service').start()
+            # move this service file to /etc/systemd/system/
+            shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
 
 
 class MacOSHandler(UnixLikeHandler):
@@ -863,10 +860,6 @@ class UnixLikeHelper(OSHelper):
     def mkdir_chown(path, perm=0o755, user=None, group=None):
         OSHelper.mkdir(path, perm)
         UnixLikeHelper.chown(path, user, group)
-
-    @staticmethod
-    def is_systemd():
-        return os.path.isdir('/run/systemd/system')
 
     @staticmethod
     def add_user(prefix, command=None, user_name='v2ray'):

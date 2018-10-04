@@ -20,6 +20,7 @@ import urllib.request
 import uuid
 import zipfile
 from abc import ABC, abstractmethod
+from itertools import zip_longest
 from urllib.error import URLError
 from urllib.parse import urlparse
 
@@ -62,36 +63,38 @@ class OSHandler(ABC):
         return 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/{}'.format(path)
 
     @staticmethod
-    def _get_v2ray_down_url(version, filename):
-        return 'https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename)
+    def _get_v2ray_down_url(path):
+        url = 'https://github.com/v2ray/v2ray-core/releases/download'
+        for _ in path:
+            url += '/{}'.format(_)
+
+        return url
 
     @staticmethod
     def _get_metadata(version, file_name):
-        url = 'https://github.com/v2ray/v2ray-core/releases/download/{}/metadata.txt'.format(version)
-        s_counter = 0
-        metadata = []
+        url = OSHandler._get_v2ray_down_url([version, 'metadata.txt'])
 
-        logging.info('Fetch metadata for version %s', version)
         try:
+            logging.info('Fetch metadata for version %s', version)
             with urllib.request.urlopen(url) as response:
-                for line in response.read().decode('utf-8').splitlines():
-                    data = line.split()
-                    data_len = len(data)
-                    if data_len == 0:
-                        s_counter = 0
-                    elif data_len == 2:
-                        if s_counter >= 1:
-                            metadata.append(data[1])
-                            s_counter += 1
+                # the raw text data from github, split by \n
+                # remove all empty lines
+                data = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
 
-                        if data[0] == 'File:' and data[1] == file_name:
-                            logging.debug('metadata for %s has been found', file_name)
-                            s_counter += 1
+                # remove first part of string
+                for i, metadata in enumerate(data):
+                    _ = metadata.split(':')
+                    data[i] = _[1].strip()
 
-                if len(metadata) != 0:
-                    return metadata
+                # group metadata by 3
+                grouped_data = Utils.grouper(data, 3)
 
-                raise MetaFetchException('Unable to to find the metadata for {}'.format(file_name))
+                # try to find the requested metadata
+                try:
+                    return next(_ for _ in grouped_data if _[0] == file_name)
+                except StopIteration:
+                    # oops, not found, warp StopIteration exception
+                    raise MetaFetchException('Unable to to find the metadata for {}'.format(file_name))
         except URLError as e:
             raise MetaFetchException('Unable to fetch the Metadata', e)
 
@@ -126,7 +129,7 @@ class OSHandler(ABC):
         full_path = OSHelper.get_temp(file=filename)
 
         # download file
-        Downloader(self._get_v2ray_down_url(version, filename), filename).start()
+        Downloader(self._get_v2ray_down_url([version, filename]), filename).start()
 
         # validate downloaded file with metadata
         try:
@@ -1150,6 +1153,11 @@ class V2rayHelper:
 
 
 class Utils:
+    @staticmethod
+    def grouper(iterable, n, fillvalue=None):
+        args = [iter(iterable)] * n
+        return zip_longest(*args, fillvalue=fillvalue)
+
     @staticmethod
     def signal_handler(signal_number):
         """

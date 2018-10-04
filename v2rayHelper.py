@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import atexit
 import datetime
 import fileinput
 import hashlib
@@ -39,7 +38,10 @@ class MetaFetchException(V2rayHelperException):
 
 
 class OSHandler(ABC):
-    def __init__(self):
+    def __init__(self, privileged=False):
+        if privileged:
+            self._gain_privileges()
+
         super().__init__()
         self._post_init()
 
@@ -51,8 +53,17 @@ class OSHandler(ABC):
         OSHelper.mkdir(OSHelper.get_temp(), 0o644)
 
     @staticmethod
+    @abstractmethod
+    def _gain_privileges():
+        pass
+
+    @staticmethod
     def _get_github_url(path):
         return 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/{}'.format(path)
+
+    @staticmethod
+    def _get_v2ray_down_url(version, filename):
+        return 'https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename)
 
     @staticmethod
     def _get_metadata(version, file_name):
@@ -115,8 +126,7 @@ class OSHandler(ABC):
         full_path = OSHelper.get_temp(file=filename)
 
         # download file
-        Downloader('https://github.com/v2ray/v2ray-core/releases/download/{}/{}'.format(version, filename),
-                   filename).start()
+        Downloader(self._get_v2ray_down_url(version, filename), filename).start()
 
         # validate downloaded file with metadata
         try:
@@ -186,13 +196,9 @@ class UnixLikeHandler(OSHandler, ABC):
     A generic unix like system handler
     """
 
-    def __init__(self, root_required=False):
-        super().__init__()
+    def __init__(self, privileged):
+        super().__init__(privileged=privileged)
         self._executables = ['v2ray', 'v2ctl']
-
-        if root_required:
-            if os.getuid() != 0:
-                UnixLikeHandler._relaunch_with_root()
 
     @staticmethod
     @abstractmethod
@@ -220,18 +226,19 @@ class UnixLikeHandler(OSHandler, ABC):
         return '/opt/v2ray/'
 
     @staticmethod
-    def _relaunch_with_root():
-        # ask for root privileges
-        logging.info('Re-lunching with root privileges...')
-        if CommandHelper.exists('sudo'):
-            logging.debug('Found sudo, I\'m going to use sudo to re-launch this software.')
-            os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
-        elif CommandHelper.exists('su'):
-            logging.debug('Found su, I\'m going to use su to re-launch this software.')
-            os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
-        else:
-            logging.debug('Oops, neither sudo nor su is found on this machine, throw an exception')
-            raise V2rayHelperException('Sorry, cannot gain root privilege.')
+    def _gain_privileges():
+        if os.getuid() != 0:
+            # ask for root privileges
+            logging.info('Re-lunching with root privileges...')
+            if CommandHelper.exists('sudo'):
+                logging.debug('Found sudo, I\'m going to use sudo to re-launch this software.')
+                os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
+            elif CommandHelper.exists('su'):
+                logging.debug('Found su, I\'m going to use su to re-launch this software.')
+                os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
+            else:
+                logging.debug('Oops, neither sudo nor su is found on this machine, throw an exception')
+                raise V2rayHelperException('Sorry, cannot gain root privilege.')
 
     def _place_file(self, path_from):
         # remove old file
@@ -421,8 +428,9 @@ class LinuxHandler(UnixLikeHandler):
 
 
 class MacOSHandler(UnixLikeHandler):
-    def _post_init(self):
-        super()._post_init()
+    def __init__(self):
+        super().__init__(False)
+
         # check if brew is installed
         if not CommandHelper.exists('brew'):
             raise V2rayHelperException('This script requires Homebrew, please install Homebrew first')
@@ -592,16 +600,15 @@ class OpenBSDHandler(BSDHandler):
 
 
 class WindowsHandler(OSHandler):
-    def _post_init(self):
-        super(WindowsHandler, self)._post_init()
-        logging.debug('execute windows handler post_init')
+    def __init__(self):
+        super().__init__(True)
 
+    @staticmethod
+    def _gain_privileges():
         import ctypes, sys
         if not ctypes.windll.shell32.IsUserAnAdmin():
             # Re-run the program with admin rights
             ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, __file__, None, 1)
-        else:
-            super(WindowsHandler, self)._post_init()
 
     @staticmethod
     def _target_os():
@@ -633,14 +640,21 @@ class WindowsHandler(OSHandler):
         logging.debug('move %s to %s', path_from, self._get_binary_file_path())
 
     @staticmethod
+    def _kill_v2ray():
+        # kill task
+        for task in ['v2ray.exe', 'wv2ray.exe']:
+            # kill all tasks, ignore any warning
+            CommandHelper.execute('taskkill.exe /IM "{}" /F'.format(task),
+                                  suppress_errors=True,
+                                  encoding=sys.getdefaultencoding()
+                                  )
+
+    @staticmethod
     def get_v2ray_version():
         def _try():
             return CommandHelper.execute('C:/v2ray/bin/v2ray.exe --version').split()[1]
 
-        def _except():
-            return None
-
-        return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
+        return Utils.closure_try(_try, subprocess.CalledProcessError)
 
     def install(self, version, filename):
         # create base dir
@@ -671,14 +685,34 @@ class WindowsHandler(OSHandler):
         else:
             logging.info('%s is already exists, skip installing config.json', config_file)
 
+        # TODO register v2ray to service
+        # CommandHelper.execute(
+        #     'sc.exe create V2RayService binpath= "C:\\v2ray\\bin\\wv2ray.exe -config C:\\v2ray\\config\\config.json" displayname= "V2Ray Service" depend= Tcpip start= auto'
+        # )
+
+        if new_token is not None:
+            logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
+            logging.info('uuid: %s', new_token[0])
+            logging.info('alterId: %d', 64)
+
     def upgrade(self, version, filename):
+        # kill task
+        self._kill_v2ray()
+
+        # download new
         self._download_and_install(version, filename)
+
+        logging.info('Successfully upgraded to v2ray-%s', version)
 
     def remove(self):
         pass
 
     def purge(self, confirmed):
-        pass
+        # kill task
+        self._kill_v2ray()
+
+        # delete v2ray folder
+        OSHelper.remove_if_exists(self._get_target_path())
 
 
 class Downloader:
@@ -904,15 +938,12 @@ class UnixLikeHelper(OSHelper):
             grp.getgrnam(group_name)
             CommandHelper.execute('{}groupdel {}'.format(prefix, group_name))
 
-        def _do_nothing():
-            pass
-
         # delete user
-        Utils.closure_try(_try_delete_user, KeyError, _do_nothing)
+        Utils.closure_try(_try_delete_user, KeyError)
 
         # delete group
         if delete_group:
-            Utils.closure_try(_try_delete_group, KeyError, _do_nothing)
+            Utils.closure_try(_try_delete_group, KeyError)
 
 
 class FileHelper:
@@ -947,13 +978,20 @@ class FileHelper:
 
 class CommandHelper:
     @staticmethod
-    def execute(command, encoding='utf-8'):
+    def execute(command, encoding='utf-8', suppress_errors=False):
         """
         :param command: shell command
         :param encoding: encoding, default utf-8
+        :param suppress_errors suppress errors
         :return: execution result
         """
-        return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
+        if not suppress_errors:
+            return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
+        else:
+            def _try():
+                CommandHelper.execute('type {}'.format(command))
+
+            return Utils.closure_try(_try, subprocess.CalledProcessError)
 
     @staticmethod
     def exists(command):
@@ -1048,14 +1086,6 @@ class V2rayHelper:
 
         return all_subclasses
 
-    @staticmethod
-    @atexit.register
-    def _cleanup():
-        logging.debug('Clean-up')
-
-        # delete temp folder
-        OSHelper.remove_if_exists(OSHelper.get_temp())
-
     def _get_os_handler(self):
         # find the correlated OSHandler
         for cls in self._get_all_subclasses(OSHandler):
@@ -1142,11 +1172,14 @@ class Utils:
         return True if hasattr(arg, '__iter__') and not isinstance(arg, (str, bytes)) else False
 
     @staticmethod
-    def closure_try(__try, __except, __on_except):
+    def closure_try(__try, __except, __on_except=None):
         try:
             return __try()
         except __except:
-            return __on_except()
+            if __on_except is None:
+                return None
+            else:
+                return __on_except()
 
     @staticmethod
     def get_args():

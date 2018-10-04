@@ -65,26 +65,22 @@ class OSHandler(ABC):
     @staticmethod
     def _get_v2ray_down_url(path):
         url = 'https://github.com/v2ray/v2ray-core/releases/download'
-        for _ in path:
-            url += '/{}'.format(_)
 
-        return url
+        return '{}/{}'.format(url, '/'.join(path))
 
     @staticmethod
     def _get_metadata(version, file_name):
-        url = OSHandler._get_v2ray_down_url([version, 'metadata.txt'])
-
         try:
+            url = OSHandler._get_v2ray_down_url([version, 'metadata.txt'])
+
             logging.info('Fetch metadata for version %s', version)
             with urllib.request.urlopen(url) as response:
                 # the raw text data from github, split by \n
                 # remove all empty lines
-                data = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
+                metadata = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
 
-                # remove first part of string
-                for i, metadata in enumerate(data):
-                    _ = metadata.split(':')
-                    data[i] = _[1].strip()
+                # remove left part of string before :
+                data = [_.split(':')[1].strip() for _ in metadata]
 
                 # group metadata by 3
                 grouped_data = Utils.grouper(data, 3)
@@ -106,23 +102,20 @@ class OSHandler(ABC):
 
     @staticmethod
     def _validate_download(filename, metadata):
-        if len(metadata) != 0:
-            # validate size
-            file_size = os.path.getsize(filename)
-            sha1 = FileHelper.sha1_file(filename)
+        # get file information
+        actual = [
+            {'value': str(os.path.getsize(filename)), 'label': 'size'},
+            {'value': FileHelper.sha1_file(filename), 'label': 'sha1'}
+        ]
 
-            if int(metadata[0]) != file_size:
-                raise V2rayHelperException('Assertion failed, expected Size {}, got {}.'.format(metadata[0], file_size))
+        for i, _ in enumerate(metadata[1:]):
+            if _ != actual[i]['value']:
+                raise V2rayHelperException('Failed to validate the {}, expected {}, got {}.'
+                                           .format(actual[i]['label'], _, actual[i]['value']))
+            else:
+                logging.debug('expected %s %s, actual %s', actual[i]['label'], _, actual[i]['value'])
 
-            if metadata[1] != sha1:
-                raise V2rayHelperException('Assertion failed, expected SHA1 {}, got {}.'.format(metadata[1], sha1))
-
-            logging.debug('expected size %d, actual size %d', int(metadata[0]), file_size)
-            logging.debug('expected sha1 %s, actual sha1 %s', metadata[1], sha1)
-
-            logging.info('File %s has passed the validation.', os.path.basename(filename))
-        else:
-            raise V2rayHelperException('Failed to perform validation, invalid metadata')
+        logging.info('File %s has passed the validation.', os.path.basename(filename))
 
     def _download_and_install(self, version, filename):
         # get temp full path
@@ -351,9 +344,7 @@ class UnixLikeHandler(OSHandler, ABC):
         # remove symbol links
         logging.info('Deleting symbol links')
         for name in ['v2ray', 'v2ctl']:
-            path = shutil.which(name)
-            if path is not None:
-                OSHelper.remove_if_exists(path)
+            OSHelper.remove_if_exists(shutil.which(name))
 
         # remove the real installed folder
         logging.info('Deleting v2ray directory')

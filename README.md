@@ -18,7 +18,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | FreeBSD       | 11.2 / 10.4    | AMD64        | :heavy_check_mark:       |                      |
 | OpenDSD       | 6.2            | AMD64        | :heavy_check_mark:       |                      |
 | MacOS         | 10.13.5        | AMD64        | :heavy_check_mark:       | Via Homebrew         |
-| Windows       | 10 1809        | X86/AMD64    | :heavy_check_mark:       | Pre-release          |
+| Windows       | 10 1809        | X86/AMD64    | :heavy_exclamation_mark: | Pre-release          |
 
 ## Usage
 ### Download file from github

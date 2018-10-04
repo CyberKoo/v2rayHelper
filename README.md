@@ -3,14 +3,13 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 
 ## Requirements
 * Python3.4 or above
-* Systemd based Linux distro
 
 ## Tested platform
 | Operating system | Version     | Architecture | Supported                | Note                 |
 | :-----------: |:-------------: | :----------: | :----------------------: | :------------------: |
-| CentOS        | 7.0+           | AMD64        | :heavy_check_mark:       |                      |
-| CentOS        | 6.x            | X86/AMD64    | :heavy_exclamation_mark: | SysV                 |
-| Ubuntu        | 16.04+         | X86/AMD64    | :heavy_check_mark:       |                      |
+| CentOS        | 7.0            | AMD64        | :heavy_check_mark:       |                      |
+| CentOS        | 6.0            | X86/AMD64    | :heavy_exclamation_mark: | SysV                 |
+| Ubuntu        | 18.04          | X86/AMD64    | :heavy_check_mark:       |                      |
 | Ubuntu        | 14.04 LTS      | X86/AMD64    | :heavy_exclamation_mark: | Upstart              |
 | Debian        | 8  / 9         | AMD64        | :heavy_check_mark:       |                      |
 | Arch Linux    | N/A            | ARM32        | :heavy_check_mark:       | Raspberry Pi 2 B+    |
@@ -19,7 +18,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | FreeBSD       | 11.2 / 10.4    | AMD64        | :heavy_check_mark:       |                      |
 | OpenDSD       | 6.2            | AMD64        | :heavy_check_mark:       |                      |
 | MacOS         | 10.13.5        | AMD64        | :heavy_check_mark:       | Via Homebrew         |
-| Windows       | 10 1803        | X86/AMD64    | :x:                      | Work In Progress     |
+| Windows       | 10 1809        | X86/AMD64    | :x:                      | Work In Progress     |
 
 ## Usage
 ### Download file from github

@@ -100,7 +100,7 @@ class OSHandler(ABC):
 
     def _get_metadata(self):
         try:
-            url = OSHandler._get_v2ray_down_url([self._version, 'metadata.txt'])
+            url = self._get_v2ray_down_url([self._version, 'metadata.txt'])
 
             logging.info('Fetch metadata for version %s', self._version)
             with urllib.request.urlopen(url) as response:
@@ -372,7 +372,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         # remove symbol links
         logging.info('Deleting symbol links')
-        for name in ['v2ray', 'v2ctl']:
+        for name in self._executables:
             OSHelper.remove_if_exists(shutil.which(name))
 
         # remove the real installed folder

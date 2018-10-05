@@ -68,7 +68,10 @@ class Decorators:
 
 
 class OSHandler(ABC):
-    def __init__(self, privileged=False):
+    def __init__(self, version, file_name, privileged=False):
+        self._version = version
+        self._file_name = file_name
+
         if privileged:
             self._gain_privileges()
 
@@ -95,12 +98,11 @@ class OSHandler(ABC):
 
         return '{}/{}'.format(url, '/'.join(path))
 
-    @staticmethod
-    def _get_metadata(version, file_name):
+    def _get_metadata(self):
         try:
-            url = OSHandler._get_v2ray_down_url([version, 'metadata.txt'])
+            url = OSHandler._get_v2ray_down_url([self._version, 'metadata.txt'])
 
-            logging.info('Fetch metadata for version %s', version)
+            logging.info('Fetch metadata for version %s', self._version)
             with urllib.request.urlopen(url) as response:
                 # the raw text data from github, split by \n
                 # remove all empty lines
@@ -114,10 +116,10 @@ class OSHandler(ABC):
 
                 # try to find the requested metadata
                 try:
-                    return next(_ for _ in grouped_data if _[0] == file_name)
+                    return next(_ for _ in grouped_data if _[0] == self._file_name)
                 except StopIteration:
                     # oops, not found, warp StopIteration exception
-                    raise MetaFetchException('Unable to to find the metadata for {}'.format(file_name))
+                    raise MetaFetchException('Unable to to find the metadata for {}'.format(self._file_name))
         except URLError as e:
             raise MetaFetchException('Unable to fetch the Metadata', e)
 
@@ -144,16 +146,16 @@ class OSHandler(ABC):
 
         logging.info('File %s has passed the validation.', os.path.basename(filename))
 
-    def _download_and_install(self, version, filename):
+    def _download_and_install(self):
         # get temp full path
-        full_path = OSHelper.get_temp(file=filename)
+        full_path = OSHelper.get_temp(file=self._file_name)
 
         # download file
-        Downloader(self._get_v2ray_down_url([version, filename]), filename).start()
+        Downloader(self._get_v2ray_down_url([self._version, self._file_name]), self._file_name).start()
 
         # validate downloaded file with metadata
         try:
-            self._validate_download(full_path, self._get_metadata(version, filename))
+            self._validate_download(full_path, self._get_metadata())
         except MetaFetchException as ex:
             logging.error('%s, validation process is skipped', ex)
 
@@ -197,11 +199,11 @@ class OSHandler(ABC):
         pass
 
     @abstractmethod
-    def install(self, version, filename):
+    def install(self):
         pass
 
     @abstractmethod
-    def upgrade(self, version, filename):
+    def upgrade(self):
         pass
 
     @abstractmethod
@@ -219,8 +221,8 @@ class UnixLikeHandler(OSHandler, ABC):
     A generic unix like system handler
     """
 
-    def __init__(self, privileged):
-        super().__init__(privileged=privileged)
+    def __init__(self, version, file_name, privileged):
+        super().__init__(version, file_name, privileged)
         self._executables = ['v2ray', 'v2ctl']
 
     @staticmethod
@@ -295,8 +297,8 @@ class UnixLikeHandler(OSHandler, ABC):
 
         return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
 
-    def install(self, version, filename):
-        self._download_and_install(version, filename)
+    def install(self):
+        self._download_and_install()
 
         # create soft link, for *nix
         for file in self._executables:
@@ -342,19 +344,19 @@ class UnixLikeHandler(OSHandler, ABC):
         self._service('start')
 
         # print message
-        logging.info('Successfully installed v2ray-{}'.format(version))
+        logging.info('Successfully installed v2ray-{}'.format(self._version))
 
         if new_token is not None:
             logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
             logging.info('uuid: %s', new_token[0])
             logging.info('alterId: %d', 64)
 
-    def upgrade(self, version, filename):
-        self._download_and_install(version, filename)
+    def upgrade(self):
+        self._download_and_install()
 
         # restart v2ray
         self._service('restart')
-        logging.info('Successfully upgraded to v2ray-%s', version)
+        logging.info('Successfully upgraded to v2ray-%s', self._version)
 
     def remove(self):
         logging.info('Uninstalling...')
@@ -403,8 +405,8 @@ class UnixLikeHandler(OSHandler, ABC):
 
 
 class LinuxHandler(UnixLikeHandler):
-    def __init__(self):
-        super().__init__(True)
+    def __init__(self, version, file_name):
+        super().__init__(version, file_name, True)
 
     def _post_init(self):
         super()._post_init()
@@ -450,7 +452,7 @@ class LinuxHandler(UnixLikeHandler):
 
 class MacOSHandler(UnixLikeHandler):
     def __init__(self):
-        super().__init__(False)
+        super().__init__('', '', False)
 
         # check if brew is installed
         if not CommandHelper.exists('brew'):
@@ -478,7 +480,7 @@ class MacOSHandler(UnixLikeHandler):
     def _install_control_script(self):
         pass
 
-    def install(self, version, filename):
+    def install(self):
         # Install the official tap
         logging.info('Install the official tap...')
         CommandHelper.execute('brew tap v2ray/v2ray')
@@ -494,7 +496,7 @@ class MacOSHandler(UnixLikeHandler):
         # print message
         logging.info('Successfully installed v2ray')
 
-    def upgrade(self, version, filename):
+    def upgrade(self):
         # upgrading v2ray
         logging.info('Upgrade v2ray...')
         try:
@@ -525,8 +527,8 @@ class MacOSHandler(UnixLikeHandler):
 
 
 class BSDHandler(UnixLikeHandler, ABC):
-    def __init__(self):
-        super().__init__(True)
+    def __init__(self, version, file_name):
+        super().__init__(version, file_name, True)
 
     def _auto_start_set(self, status):
         rc_file_path = '/etc/rc.conf'
@@ -621,8 +623,8 @@ class OpenBSDHandler(BSDHandler):
 
 
 class WindowsHandler(OSHandler):
-    def __init__(self):
-        super().__init__(True)
+    def __init__(self, version, file_name):
+        super().__init__(version, file_name, True)
 
     @staticmethod
     def _gain_privileges():
@@ -677,11 +679,11 @@ class WindowsHandler(OSHandler):
 
         return Utils.closure_try(_try, subprocess.CalledProcessError)
 
-    def install(self, version, filename):
+    def install(self):
         # create base dir
         OSHelper.mkdir(self._get_target_path())
 
-        self._download_and_install(version, filename)
+        self._download_and_install()
 
         # download and place the default config file
         conf_dir = self._get_conf_dir()
@@ -716,14 +718,14 @@ class WindowsHandler(OSHandler):
             logging.info('uuid: %s', new_token[0])
             logging.info('alterId: %d', 64)
 
-    def upgrade(self, version, filename):
+    def upgrade(self):
         # kill task
         self._kill_v2ray()
 
         # download new
-        self._download_and_install(version, filename)
+        self._download_and_install()
 
-        logging.info('Successfully upgraded to v2ray-%s', version)
+        logging.info('Successfully upgraded to v2ray-%s', self._version)
 
     def remove(self):
         pass
@@ -1110,14 +1112,14 @@ class V2rayHelper:
         raise UnsupportedPlatformException()
 
     def run(self, args):
-        # make sure init function is executed
-        handler = (self._get_os_handler())()
-        version = handler.get_v2ray_version()
-
         # get information from API
         self._api.fetch()
         file_name = self._api.search(self._machine)
         latest_version = self._api.get_latest_version()
+
+        # make sure init function is executed
+        handler = (self._get_os_handler())(latest_version, file_name)
+        version = handler.get_v2ray_version()
 
         # display information obtained from api
         logging.info('Hi there, the latest version of v2ray is %s %s', latest_version, self._api.get_pre_release())
@@ -1132,13 +1134,13 @@ class V2rayHelper:
                 if args.force is False and version is not None:
                     raise V2rayHelperException('V2Ray is already installed, use --force to reinstall.')
 
-                handler.install(latest_version, file_name)
+                handler.install()
             elif args.upgrade:
                 if version is None:
                     raise V2rayHelperException('V2Ray must be installed before you can upgrade it.')
 
                 if version != latest_version or args.force:
-                    handler.upgrade(latest_version, file_name)
+                    handler.upgrade()
                 else:
                     raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
             elif args.remove:
@@ -1225,7 +1227,7 @@ if __name__ == "__main__":
         ]
     )
 
-    logging.debug('debug model enabled')
+    logging.debug('Debug model enabled')
 
     try:
         helper = V2rayHelper()

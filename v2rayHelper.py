@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import sys
+import time
+from itertools import zip_longest
+
 import argparse
 import datetime
 import fileinput
@@ -13,14 +17,11 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import tempfile
-import time
 import urllib.request
 import uuid
 import zipfile
 from abc import ABC, abstractmethod
-from itertools import zip_longest
 from urllib.error import URLError
 from urllib.parse import urlparse
 
@@ -34,7 +35,7 @@ class UnsupportedPlatformException(V2rayHelperException):
         return 'Unsupported platform: {0}/{1} ({2})'.format(platform.system(), platform.machine(), platform.version())
 
 
-class MetaFetchException(V2rayHelperException):
+class DigestFetchException(V2rayHelperException):
     pass
 
 
@@ -98,51 +99,42 @@ class OSHandler(ABC):
 
         return '{}/{}'.format(url, '/'.join(path))
 
-    def _get_metadata(self):
-        try:
-            url = self._get_v2ray_down_url([self._version, 'metadata.txt'])
-
-            logging.info('Fetch metadata for version %s', self._version)
-            with urllib.request.urlopen(url) as response:
-                # the raw text data from github, split by \n
-                # remove all empty lines
-                metadata = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
-
-                # remove left part of string before :
-                data = [_.split(':')[1].strip() for _ in metadata]
-
-                # group metadata by 3
-                grouped_data = Utils.grouper(data, 3)
-
-                # try to find the requested metadata
-                try:
-                    return next(_ for _ in grouped_data if _[0] == self._file_name)
-                except StopIteration:
-                    # oops, not found, warp StopIteration exception
-                    raise MetaFetchException('Unable to to find the metadata for {}'.format(self._file_name))
-        except URLError as e:
-            raise MetaFetchException('Unable to fetch the Metadata', e)
-
     @staticmethod
     def _extract_file(path, output):
         with zipfile.ZipFile(path, 'r') as zip_ref:
             zip_ref.extractall(output)
             return zip_ref.namelist()[0]
 
-    @staticmethod
-    def _validate_download(filename, metadata):
-        # get file information
-        actual = [
-            {'value': str(os.path.getsize(filename)), 'label': 'size'},
-            {'value': FileHelper.sha1_file(filename), 'label': 'sha1'}
-        ]
+    def _get_digest(self):
+        try:
+            url = OSHandler._get_v2ray_down_url([self._version, '{}.dgst'.format(self._file_name)])
 
-        for i, _ in enumerate(metadata[1:]):
-            if _ != actual[i]['value']:
-                raise V2rayHelperException('Failed to validate the {}, expected {}, got {}.'
-                                           .format(actual[i]['label'], _, actual[i]['value']))
-            else:
-                logging.debug('Expected %s %s, actual %s', actual[i]['label'], _, actual[i]['value'])
+            logging.info('Fetch digests for version %s', self._version)
+            with urllib.request.urlopen(url) as response:
+                # the raw text data from github, split by \n
+                # remove all empty lines
+                dgst = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
+
+                # convert to dict
+                data = {l[0].strip(): l[1].strip() for l in (_.split('=') for _ in dgst)}
+
+            return data
+        except URLError as e:
+            logging.debug('Exception durning fetch data from github, detail: %s', e)
+            raise DigestFetchException('Unable to fetch the Metadata')
+
+    def _validate_download(self, filename):
+        # get signature file
+        dgst_expected = self._get_digest()
+
+        # get file information
+        sha1 = FileHelper.sha1_file(filename)
+
+        if dgst_expected['SHA1'] != sha1:
+            raise V2rayHelperException(
+                'Failed to validate the sha1, expected {}, got {}.'.format(dgst_expected['SHA1'], sha1))
+        else:
+            logging.debug('Expected sha1 %s, actual %s', dgst_expected['SHA1'], sha1)
 
         logging.info('File %s has passed the validation.', os.path.basename(filename))
 
@@ -155,8 +147,8 @@ class OSHandler(ABC):
 
         # validate downloaded file with metadata
         try:
-            self._validate_download(full_path, self._get_metadata())
-        except MetaFetchException as ex:
+            self._validate_download(full_path)
+        except DigestFetchException as ex:
             logging.error('%s, validation process is skipped', ex)
 
         # extract zip file
@@ -1044,7 +1036,8 @@ class V2RayAPI:
                 self._json = json.loads(response.read().decode('utf8'))
                 self._pre_release = '(pre release)' if self._json['prerelease'] else ''
                 self._latest_version = self._json['tag_name']
-        except URLError:
+        except URLError as e:
+            logging.debug('Exception durning fetch data from API, detail: %s', e)
             raise V2rayHelperException('Unable to fetch data from API')
 
     @staticmethod
@@ -1150,7 +1143,7 @@ class V2rayHelper:
             elif args.purge:
                 handler.purge(args.sure)
             elif args.auto:
-                logging.debug('It seems you did not specify an action, fall back to the auto section')
+                logging.debug('It seems you did not specify any action, fall back to the auto mode')
 
                 # disable auto
                 args.auto = False

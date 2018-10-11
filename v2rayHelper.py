@@ -99,20 +99,13 @@ class OSHandler(ABC):
 
         return '{}/{}'.format(url, '/'.join(path))
 
-    @staticmethod
-    def _extract_file(path, output):
-        with zipfile.ZipFile(path, 'r') as zip_ref:
-            zip_ref.extractall(output)
-            return zip_ref.namelist()[0]
-
     def _get_digest(self):
         try:
-            url = OSHandler._get_v2ray_down_url([self._version, '{}.dgst'.format(self._file_name)])
+            url = self._get_v2ray_down_url([self._version, '{}.dgst'.format(self._file_name)])
 
             logging.info('Fetch digests for version %s', self._version)
             with urllib.request.urlopen(url) as response:
-                # the raw text data from github, split by \n
-                # remove all empty lines
+                # the raw text data from github, split by \n, remove all empty lines
                 dgst = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
 
                 # convert to dict
@@ -152,14 +145,15 @@ class OSHandler(ABC):
             logging.error('%s, validation process is skipped', ex)
 
         # extract zip file
-        extracted_dir = self._extract_file(full_path, OSHelper.get_temp())
-        logging.debug('File extracted to %s', extracted_dir)
+        extracted_path = OSHelper.get_temp(path=['v2ray'])
+        with zipfile.ZipFile(full_path, 'r') as zip_ref:
+            zip_ref.extractall(extracted_path)
 
         # remove zip file
         OSHelper.remove_if_exists(full_path)
 
         # place v2ray to target_path
-        self._place_file(OSHelper.get_temp(path=[extracted_dir]))
+        self._place_file(extracted_path)
 
     @staticmethod
     @abstractmethod

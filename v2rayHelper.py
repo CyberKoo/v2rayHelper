@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import time
-from itertools import zip_longest
 
 import argparse
 import datetime
@@ -1031,7 +1030,7 @@ class V2RayAPI:
                 self._pre_release = '(pre release)' if self._json['prerelease'] else ''
                 self._latest_version = self._json['tag_name']
         except URLError as e:
-            logging.debug('Exception durning fetch data from API, detail: %s', e)
+            logging.debug('Exception during fetch data from API, detail: %s', e)
             raise V2rayHelperException('Unable to fetch data from API')
 
     @staticmethod
@@ -1126,7 +1125,8 @@ class V2rayHelper:
                 if version is None:
                     raise V2rayHelperException('V2Ray must be installed before you can upgrade it.')
 
-                if version != latest_version or args.force:
+                # remove all letters
+                if version != ''.join([_ for _ in latest_version if not _.isalpha()]) or args.force:
                     handler.upgrade()
                 else:
                     raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
@@ -1154,11 +1154,6 @@ class V2rayHelper:
 
 
 class Utils:
-    @staticmethod
-    def grouper(iterable, n, fillvalue=None):
-        args = [iter(iterable)] * n
-        return zip_longest(*args, fillvalue=fillvalue)
-
     @staticmethod
     def is_collection(arg):
         return True if hasattr(arg, '__iter__') and not isinstance(arg, (str, bytes)) else False

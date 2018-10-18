@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-import sys
-import time
-
 import argparse
 import datetime
 import fileinput
@@ -16,7 +13,9 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 import zipfile
@@ -183,6 +182,11 @@ class OSHandler(ABC):
     def get_v2ray_version():
         pass
 
+    @staticmethod
+    @abstractmethod
+    def has_go_compiler():
+        pass
+
     @abstractmethod
     def install(self):
         pass
@@ -281,6 +285,10 @@ class UnixLikeHandler(OSHandler, ABC):
             return None
 
         return Utils.closure_try(_try, subprocess.CalledProcessError, _except)
+
+    @staticmethod
+    def has_go_compiler():
+        return CommandHelper.exists('go')
 
     def install(self):
         self._download_and_install()
@@ -648,7 +656,7 @@ class WindowsHandler(OSHandler):
         logging.debug('move %s to %s', path_from, self._get_binary_file_path())
 
     @staticmethod
-    def _kill_v2ray():
+    def _kill_v2ray_process():
         # kill task
         for task in ['v2ray.exe', 'wv2ray.exe']:
             # kill all tasks, ignore any warning
@@ -663,6 +671,10 @@ class WindowsHandler(OSHandler):
             return CommandHelper.execute('C:/v2ray/bin/v2ray.exe --version').split()[1]
 
         return Utils.closure_try(_try, subprocess.CalledProcessError)
+
+    @staticmethod
+    def has_go_compiler():
+        return False
 
     def install(self):
         # create base dir
@@ -705,7 +717,7 @@ class WindowsHandler(OSHandler):
 
     def upgrade(self):
         # kill task
-        self._kill_v2ray()
+        self._kill_v2ray_process()
 
         # download new
         self._download_and_install()
@@ -717,7 +729,7 @@ class WindowsHandler(OSHandler):
 
     def purge(self, confirmed):
         # kill task
-        self._kill_v2ray()
+        self._kill_v2ray_process()
 
         # delete v2ray folder
         OSHelper.remove_if_exists(self._get_target_path())

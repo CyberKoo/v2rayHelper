@@ -7,7 +7,7 @@ Wants=network.target
 Type=simple
 User=v2ray
 Group=v2ray
-PIDFile=/var/run/v2ray.pid
+PIDFile=/run/v2ray.pid
 ExecStart=/usr/bin/v2ray -config /etc/v2ray/config.json
 Restart=on-failure
 

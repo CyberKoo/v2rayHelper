@@ -2,30 +2,34 @@
   "log": {
     "loglevel": "info"
   },
-  "inbound": {
-    "listen": "0.0.0.0",
-    "port": 12345,
-    "protocol": "vmess",
-    "allocate": {
-      "strategy": "always"
-    },
-    "settings": {
-      "clients": [
-        {
-          "id": "dbe16381-f905-4b88-946f-dfc21ed9be29",
-          "alterId": 64,
-          "security": "auto"
-        }
-      ]
-    },
-    "streamSettings":{
-      "network":"tcp"
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 12345,
+      "protocol": "vmess",
+      "allocate": {
+        "strategy": "always"
+      },
+      "settings": {
+        "clients": [
+          {
+            "id": "dbe16381-f905-4b88-946f-dfc21ed9be29",
+            "alterId": 64,
+            "security": "auto"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
     }
-  },
-  "outbound": {
-    "protocol": "freedom",
-    "settings": {}
-  },
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ],
   "routing": {
     "strategy": "rules",
     "settings": {

@@ -9,11 +9,11 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 | :-----------: |:-------------: | :----------: | :----------------------: | :------------------: |
 | CentOS        | 7.0            | AMD64        | :heavy_check_mark:       |                      |
 | CentOS        | 6.0            | X86/AMD64    | :heavy_exclamation_mark: | SysV                 |
-| Ubuntu        | 18.04          | X86/AMD64    | :heavy_check_mark:       |                      |
+| Ubuntu        | 18.04.2 LTS    | X86/AMD64    | :heavy_check_mark:       |                      |
 | Ubuntu        | 14.04 LTS      | X86/AMD64    | :heavy_exclamation_mark: | Upstart              |
 | Debian        | 8  / 9         | AMD64        | :heavy_check_mark:       |                      |
 | Arch Linux    | N/A            | ARM32        | :heavy_check_mark:       | Raspberry Pi 2 B+    |
-| OpenSUSE      | Leap 15.0      | AMD64/Aarch64| :heavy_check_mark:       |                      |
+| OpenSUSE      | Leap 15.0      | AMD64/Aarch64| :heavy_check_mark:       | Raspberry Pi 3 B+    |
 | OpenSUSE      | Tumbleweed     | X86/AMD64    | :heavy_check_mark:       | 2018.05.30           |
 | FreeBSD       | 11.2 / 10.4    | AMD64        | :heavy_check_mark:       |                      |
 | OpenDSD       | 6.2            | AMD64        | :heavy_check_mark:       |                      |
@@ -23,7 +23,7 @@ v2rayHelper is a python script. It provides an easy way to install or upgrade v2
 ## Usage
 ### Download file from github
 ```shell
-wget 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/v2rayHelper.py'
+wget 'https://raw.githubusercontent.com/CyberKoo/v2rayHelper/master/v2rayHelper.py'
 ```
 
 ### Auto mode

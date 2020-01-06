@@ -40,13 +40,13 @@ class DigestFetchException(V2rayHelperException):
 class Decorators:
     @staticmethod
     def legacy_linux_warning(func):
-        def wrapper(arg):
+        def _decorator(arg):
             if LinuxHandler._is_legacy_os():
-                logging.warning('%s cannot be used in legacy linux', func.__name__)
+                logging.warning('%s cannot be used on legacy linux', func.__name__)
             else:
                 func(arg)
 
-        return wrapper
+        return _decorator
 
     @staticmethod
     def signal_handler(signal_number):
@@ -59,11 +59,11 @@ class Decorators:
         """
 
         # create the 'real' decorator which takes only a function as an argument
-        def __decorator(_function):
+        def _decorator(_function):
             signal.signal(signal_number, _function)
             return _function
 
-        return __decorator
+        return _decorator
 
 
 class OSHandler(ABC):
@@ -111,7 +111,7 @@ class OSHandler(ABC):
 
             return data
         except URLError as e:
-            logging.debug('Exception durning fetch data from github, detail: %s', e)
+            logging.debug('Exception during fetch data from github, detail: %s', e)
             raise DigestFetchException('Unable to fetch the Metadata')
 
     def _validate_download(self, filename):
@@ -339,7 +339,7 @@ class UnixLikeHandler(OSHandler, ABC):
         # print message
         logging.info('Successfully installed v2ray-{}'.format(self._version))
 
-        if new_token is not None:
+        if new_token:
             logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
             logging.info('uuid: %s', new_token[0])
             logging.info('alterId: %d', 64)
@@ -710,7 +710,7 @@ class WindowsHandler(OSHandler):
         #     'sc.exe create V2RayService binpath= "C:\\v2ray\\bin\\wv2ray.exe -config C:\\v2ray\\config\\config.json" displayname= "V2Ray Service" depend= Tcpip start= auto'
         # )
 
-        if new_token is not None:
+        if new_token:
             logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
             logging.info('uuid: %s', new_token[0])
             logging.info('alterId: %d', 64)
@@ -784,7 +784,7 @@ class Downloader:
 
     def start(self):
         base_name = os.path.basename(urlparse(self._url).path)
-        file_name = self._file_name if self._file_name is not None else base_name
+        file_name = self._file_name if self._file_name else base_name
 
         # full path
         path = OSHelper.get_temp(file=file_name)
@@ -851,7 +851,7 @@ class OSHelper:
     @staticmethod
     def get_temp(base_dir='v2rayHelper', path=None, file=''):
         full_path = ''
-        if path is not None:
+        if path:
             full_path = '/'.join(path)
 
         return '{}/{}/{}/{}'.format(tempfile.gettempdir().replace('\\', '/'), base_dir, full_path, file) \
@@ -1129,7 +1129,7 @@ class V2rayHelper:
         # execute selected action
         def executor():
             if args.install:
-                if args.force is False and version is not None:
+                if args.force is False and version:
                     raise V2rayHelperException('V2Ray is already installed, use --force to reinstall.')
 
                 handler.install()

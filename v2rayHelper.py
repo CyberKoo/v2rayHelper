@@ -89,7 +89,7 @@ class OSHandler(ABC):
 
     @staticmethod
     def _get_github_url(path):
-        return 'https://raw.githubusercontent.com/waf7225/v2rayHelper/master/{}'.format(path)
+        return 'https://raw.githubusercontent.com/CyberKoo/v2rayHelper/master/{}'.format(path)
 
     @staticmethod
     def _get_v2ray_down_url(path):
@@ -100,14 +100,15 @@ class OSHandler(ABC):
     def _get_digest(self):
         try:
             url = self._get_v2ray_down_url([self._version, '{}.dgst'.format(self._file_name)])
-
             logging.info('Fetch digests for version %s', self._version)
-            with urllib.request.urlopen(url) as response:
-                # the raw text data from github, split by \n, remove all empty lines
-                dgst = [l for l in (line.strip() for line in response.read().decode('utf-8').splitlines()) if l]
 
-                # convert to dict
-                data = {l[0].strip(): l[1].strip() for l in (_.split('=') for _ in dgst)}
+            response = Downloader(url).load()
+
+            # the raw text data from github, split by \n, remove all empty lines
+            dgst = [line for line in response.splitlines() if line]
+
+            # convert to dict
+            data = {l[0].strip(): l[1].strip() for l in (_.split('=') for _ in dgst)}
 
             return data
         except URLError as e:
@@ -134,7 +135,7 @@ class OSHandler(ABC):
         full_path = OSHelper.get_temp(file=self._file_name)
 
         # download file
-        Downloader(self._get_v2ray_down_url([self._version, self._file_name]), self._file_name).start()
+        Downloader(self._get_v2ray_down_url([self._version, self._file_name])).save(self._file_name)
 
         # validate downloaded file with metadata
         try:
@@ -246,10 +247,10 @@ class UnixLikeHandler(OSHandler, ABC):
             logging.info('Re-lunching with root privileges...')
             if CommandHelper.exists('sudo'):
                 logging.debug('Found sudo, I\'m going to use sudo to re-launch this software.')
-                os.execvp('sudo', ['sudo', '/usr/bin/env', 'python3'] + sys.argv)
+                os.execvp('sudo', ['sudo', '-E', '/usr/bin/env', 'python3'] + sys.argv)
             elif CommandHelper.exists('su'):
                 logging.debug('Found su, I\'m going to use su to re-launch this software.')
-                os.execvp('su', ['su', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
+                os.execvp('su', ['su', '-m', '-c', ' '.join(['/usr/bin/env python3'] + sys.argv)])
             else:
                 logging.debug('Oops, neither sudo nor su is found on this machine, throw an exception')
                 raise V2rayHelperException('Sorry, cannot gain root privilege.')
@@ -320,7 +321,7 @@ class UnixLikeHandler(OSHandler, ABC):
 
         if not os.path.exists(config_file):
             # download config file
-            Downloader(self._get_github_url('misc/config.json'), 'config.json').start()
+            Downloader(self._get_github_url('misc/config.json')).save('config.json')
             shutil.move(OSHelper.get_temp(file='config.json'), config_file)
 
             # replace default value with randomly generated one
@@ -438,7 +439,7 @@ class LinuxHandler(UnixLikeHandler):
     @Decorators.legacy_linux_warning
     def _install_control_script(self):
         # download systemd control script
-        Downloader(self._get_github_url('misc/v2ray.service'), 'v2ray.service').start()
+        Downloader(self._get_github_url('misc/v2ray.service')).save('v2ray.service')
         # move this service file to /etc/systemd/system/
         shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
 
@@ -524,23 +525,7 @@ class BSDHandler(UnixLikeHandler, ABC):
         super().__init__(version, file_name, True)
 
     def _auto_start_set(self, status):
-        rc_file_path = '/etc/rc.conf'
-
-        if status:
-            # Enable
-            if not FileHelper.contains(rc_file_path, 'v2ray_enable'):
-                with open(rc_file_path, 'a+') as file:
-                    file.write('\nv2ray_enable="YES"\n')
-        else:
-            # Disable
-            if FileHelper.contains(rc_file_path, 'v2ray_enable'):
-                with open(rc_file_path, 'r+') as file:
-                    new_f = file.readlines()
-                    file.seek(0)
-                    for line in new_f:
-                        if 'v2ray_enable' not in line:
-                            file.write(line)
-                    file.truncate()
+        CommandHelper.execute('sysrc {} v2ray'.format('enable' if status else 'disable'))
 
     @staticmethod
     def _get_os_base_path():
@@ -565,7 +550,7 @@ class FreeBSDHandler(BSDHandler):
         CommandHelper.execute('service v2ray {}'.format(action))
 
     def _install_control_script(self):
-        Downloader(self._get_github_url('misc/v2ray.freebsd'), 'v2ray').start()
+        Downloader(self._get_github_url('misc/v2ray.freebsd')).save('v2ray')
         path = '/usr/local/etc/rc.d/v2ray'
 
         shutil.move(OSHelper.get_temp(file='v2ray'), path)
@@ -599,7 +584,7 @@ class OpenBSDHandler(BSDHandler):
         return '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'
 
     def _install_control_script(self):
-        Downloader(self._get_github_url('misc/v2ray.openbsd'), 'v2ray').start()
+        Downloader(self._get_github_url('misc/v2ray.openbsd')).save('v2ray')
         path = '/etc/rc.d/v2ray'
 
         shutil.move(OSHelper.get_temp(file='v2ray'), path)
@@ -615,131 +600,10 @@ class OpenBSDHandler(BSDHandler):
         OSHelper.remove_if_exists('/etc/rc.d/v2ray')
 
 
-class WindowsHandler(OSHandler):
-    def __init__(self, version, file_name):
-        super().__init__(version, file_name, True)
-
-    @staticmethod
-    def _gain_privileges():
-        import ctypes, sys
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            # Re-run the program with admin rights
-            ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, __file__, None, 1)
-
-    @staticmethod
-    def _target_os():
-        return ['windows']
-
-    @staticmethod
-    def _get_target_path():
-        return 'C:/v2ray/'
-
-    @staticmethod
-    def _get_conf_dir():
-        return '{}config'.format(WindowsHandler._get_target_path())
-
-    @staticmethod
-    # not applicable
-    def _get_os_base_path():
-        return ''
-
-    @staticmethod
-    def _get_binary_file_path():
-        return '{}bin'.format(WindowsHandler._get_target_path())
-
-    def _place_file(self, path_from):
-        # remove old file
-        OSHelper.remove_if_exists(self._get_binary_file_path())
-
-        # move downloaded file to path_to
-        shutil.move(path_from, self._get_binary_file_path())
-        logging.debug('move %s to %s', path_from, self._get_binary_file_path())
-
-    @staticmethod
-    def _kill_v2ray_process():
-        # kill task
-        for task in ['v2ray.exe', 'wv2ray.exe']:
-            # kill all tasks, ignore any warning
-            CommandHelper.execute('taskkill.exe /IM "{}" /F'.format(task),
-                                  suppress_errors=True,
-                                  encoding=sys.getdefaultencoding()
-                                  )
-
-    @staticmethod
-    def get_v2ray_version():
-        def _try():
-            return CommandHelper.execute('C:/v2ray/bin/v2ray.exe --version').split()[1]
-
-        return Utils.closure_try(_try, subprocess.CalledProcessError)
-
-    @staticmethod
-    def has_go_compiler():
-        return False
-
-    def install(self):
-        # create base dir
-        OSHelper.mkdir(self._get_target_path())
-
-        self._download_and_install()
-
-        # download and place the default config file
-        conf_dir = self._get_conf_dir()
-
-        # create default configuration file path
-        OSHelper.mkdir(conf_dir, 0o755)
-        config_file = '{}/config.json'.format(conf_dir)
-        new_token = None
-
-        if not os.path.exists(config_file):
-            # download config file
-            Downloader(self._get_github_url('misc/config.json'), 'config.json').start()
-            shutil.move(OSHelper.get_temp(file='config.json'), config_file)
-
-            # replace default value with randomly generated one
-            new_token = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
-            FileHelper.replace('{}/config.json'.format(conf_dir), [
-                ['dbe16381-f905-4b88-946f-dfc21ed9be29', new_token[0]],
-                # ['0.0.0.0', str(get_ip())],
-                ['12345', new_token[1]]
-            ])
-        else:
-            logging.info('%s is already exists, skip installing config.json', config_file)
-
-        # TODO register v2ray to service
-        # CommandHelper.execute(
-        #     'sc.exe create V2RayService binpath= "C:\\v2ray\\bin\\wv2ray.exe -config C:\\v2ray\\config\\config.json" displayname= "V2Ray Service" depend= Tcpip start= auto'
-        # )
-
-        if new_token:
-            logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
-            logging.info('uuid: %s', new_token[0])
-            logging.info('alterId: %d', 64)
-
-    def upgrade(self):
-        # kill task
-        self._kill_v2ray_process()
-
-        # download new
-        self._download_and_install()
-
-        logging.info('Successfully upgraded to v2ray-%s', self._version)
-
-    def remove(self):
-        pass
-
-    def purge(self, confirmed):
-        # kill task
-        self._kill_v2ray_process()
-
-        # delete v2ray folder
-        OSHelper.remove_if_exists(self._get_target_path())
-
-
 class Downloader:
-    def __init__(self, url, file_name):
+    def __init__(self, url):
         # init system variable
         self._url = url
-        self._file_name = file_name
 
         # variable for report hook
         self._last_reported = 0
@@ -782,9 +646,9 @@ class Downloader:
         else:
             return base_name
 
-    def start(self):
+    def save(self, _file_name=None):
         base_name = os.path.basename(urlparse(self._url).path)
-        file_name = self._file_name if self._file_name else base_name
+        file_name = _file_name if _file_name else base_name
 
         # full path
         path = OSHelper.get_temp(file=file_name)
@@ -841,6 +705,10 @@ class Downloader:
             raise V2rayHelperException('Unable to fetch url: {}'.format(self._url))
 
         os.rename(temp_path, path)
+
+    def load(self, encoding='utf8'):
+        with urllib.request.urlopen(self._url) as response:
+            return response.read().decode(encoding)
 
 
 class OSHelper:
@@ -963,7 +831,7 @@ class FileHelper:
     def contains(file_name, data):
         with open(file_name) as file:
             for line in file:
-                if line.find(data) is not -1:
+                if line.find(data) != -1:
                     return True
 
         return False
@@ -1034,13 +902,12 @@ class V2RayAPI:
         self._latest_version = None
 
     def fetch(self):
-        api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
-
         try:
-            with urllib.request.urlopen(api_url) as response:
-                self._json = json.loads(response.read().decode('utf8'))
-                self._pre_release = '(pre release)' if self._json['prerelease'] else ''
-                self._latest_version = self._json['tag_name']
+            api_url = 'https://api.github.com/repos/v2ray/v2ray-core/releases/latest'
+            response = Downloader(api_url).load()
+            self._json = json.loads(response)
+            self._pre_release = '(pre release)' if self._json['prerelease'] else ''
+            self._latest_version = self._json['tag_name']
         except URLError as e:
             logging.debug('Exception during fetch data from API, detail: %s', e)
             raise V2rayHelperException('Unable to fetch data from API')

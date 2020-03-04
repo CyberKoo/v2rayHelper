@@ -1,0 +1,18 @@
+placeholder_com {
+  proxy /ws_path 127.0.0.1:10086 {
+    websocket
+    keepalive 60
+
+    header_upstream Connection {>Connection}
+    header_upstream Upgrade {>Upgrade}
+    header_upstream -Origin
+    header_upstream X-Real-IP {remote}
+    header_upstream X-Forwarded-For {remote}
+    header_upstream X-Forwarded-Port {server_port}
+    header_upstream X-Forwarded-Proto {scheme}
+  }
+
+  status 200 /ping
+
+  log stdout
+}

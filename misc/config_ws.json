@@ -4,8 +4,8 @@
   },
   "inbounds": [
     {
-      "listen": "0.0.0.0",
-      "port": 12345,
+      "listen": "127.0.0.1",
+      "port": 10086,
       "protocol": "vmess",
       "allocate": {
         "strategy": "always"
@@ -20,16 +20,32 @@
         ]
       },
       "streamSettings": {
-        "network": "tcp"
+        "network": "ws",
+        "wsSettings": {
+          "connectionReuse": true,
+          "path": "/ws_path"
+        }
       }
     }
   ],
   "outbounds": [
     {
       "protocol": "freedom",
-      "settings": {}
+      "settings": {},
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {},
+      "tag": "blocked"
     }
   ],
+  "dns": {
+    "servers": [
+      "1.1.1.1",
+      "1.0.0.1"
+    ]
+  },
   "routing": {
     "strategy": "rules",
     "settings": {

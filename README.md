@@ -31,11 +31,26 @@ The following command will automatically install v2ray if not installed, or upgr
 python3 v2rayHelper.py
 ```
 
+#### Install v2ray(websocket) with caddy
+```shell
+python3 v2rayHelper.py --websocket --domain example.com
+```
+
+#### Install v2ray(websocket) without caddy
+```shell
+python3 v2rayHelper.py --websocket --no_caddy
+```
+
 ### Manual mode
 
 #### Install v2ray
 ```shell
 python3 v2rayHelper.py --install
+```
+
+#### Install v2ray(websocket) with caddy
+```shell
+python3 v2rayHelper.py --install --websocket --domain example.com
 ```
 
 #### Force install v2ray

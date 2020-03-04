@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import os
+import pathlib
 import platform
 import random
 import shutil
@@ -41,7 +42,7 @@ class Decorators:
     @staticmethod
     def legacy_linux_warning(func):
         def _decorator(arg):
-            if LinuxHandler._is_legacy_os():
+            if LinuxHandler.is_legacy_os():
                 logging.warning('%s cannot be used on legacy linux', func.__name__)
             else:
                 func(arg)
@@ -70,6 +71,8 @@ class OSHandler(ABC):
     def __init__(self, version, file_name, privileged=False):
         self._version = version
         self._file_name = file_name
+        self._websocket = False
+        self._ws_path = uuid.uuid4().hex[0:random.randint(14, 16)]
 
         if privileged:
             self._gain_privileges()
@@ -154,6 +157,9 @@ class OSHandler(ABC):
         # place v2ray to target_path
         self._place_file(extracted_path)
 
+    def use_websocket(self):
+        self._websocket = True
+
     @staticmethod
     @abstractmethod
     def _target_os():
@@ -198,6 +204,10 @@ class OSHandler(ABC):
 
     @abstractmethod
     def remove(self):
+        pass
+
+    @abstractmethod
+    def install_caddy(self, domain):
         pass
 
     @abstractmethod
@@ -321,15 +331,18 @@ class UnixLikeHandler(OSHandler, ABC):
 
         if not os.path.exists(config_file):
             # download config file
-            Downloader(self._get_github_url('misc/config.json')).save('config.json')
+            if self._websocket:
+                Downloader(self._get_github_url('misc/config_ws.json')).save('config.json')
+            else:
+                Downloader(self._get_github_url('misc/config.json')).save('config.json')
             shutil.move(OSHelper.get_temp(file='config.json'), config_file)
 
             # replace default value with randomly generated one
             new_token = [str(uuid.uuid4()), str(random.randint(50000, 65535))]
             FileHelper.replace('{}/config.json'.format(conf_dir), [
                 ['dbe16381-f905-4b88-946f-dfc21ed9be29', new_token[0]],
-                # ['0.0.0.0', str(get_ip())],
-                ['12345', new_token[1]]
+                ['12345', new_token[1]],
+                ['ws_path', self._ws_path]
             ])
         else:
             logging.info('%s is already exists, skip installing config.json', config_file)
@@ -341,9 +354,12 @@ class UnixLikeHandler(OSHandler, ABC):
         logging.info('Successfully installed v2ray-{}'.format(self._version))
 
         if new_token:
-            logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip(), new_token[1])
+            logging.info('v2ray is now bind on %s:%s', OSHelper.get_ip() if not self._websocket else '127.0.0.1',
+                         new_token[1] if not self._websocket else '10086')
             logging.info('uuid: %s', new_token[0])
             logging.info('alterId: %d', 64)
+        if self._websocket:
+            logging.info('websocket path: /%s', self._ws_path)
 
     def upgrade(self):
         self._download_and_install()
@@ -399,13 +415,14 @@ class UnixLikeHandler(OSHandler, ABC):
 
 
 class LinuxHandler(UnixLikeHandler):
+
     def __init__(self, version, file_name):
         super().__init__(version, file_name, True)
 
     def _post_init(self):
         super()._post_init()
 
-        if self._is_legacy_os():
+        if self.is_legacy_os():
             logging.warning('You\'re running an outdated linux version, some operation will not be supported.')
 
     @staticmethod
@@ -421,7 +438,7 @@ class LinuxHandler(UnixLikeHandler):
         return '/usr/bin'
 
     @staticmethod
-    def _is_legacy_os():
+    def is_legacy_os():
         return not os.path.isdir('/run/systemd/system/')
 
     def _auto_start_set(self, status):
@@ -442,6 +459,55 @@ class LinuxHandler(UnixLikeHandler):
         Downloader(self._get_github_url('misc/v2ray.service')).save('v2ray.service')
         # move this service file to /etc/systemd/system/
         shutil.move(OSHelper.get_temp(file='v2ray.service'), '/etc/systemd/system/v2ray.service')
+
+    def install_caddy(self, domain):
+        Downloader('https://getcaddy.com/').save('caddy_installer')
+        caddy_installer = OSHelper.get_temp(file='caddy_installer')
+
+        # add user
+        logging.info('create caddy user')
+        UnixLikeHelper.add_user(self._get_user_prefix(), self._add_user_command(), 'caddy')
+
+        logging.info('install caddy')
+        CommandHelper.execute('bash {} personal'.format(caddy_installer))
+
+        # create caddy conf folders
+        OSHelper.mkdir('/etc/caddy')
+        OSHelper.mkdir('/etc/caddy/conf.d')
+        OSHelper.mkdir('/etc/ssl/caddy', 0o770)
+        UnixLikeHelper.chown('/etc/ssl/caddy', 'root', 'caddy')
+
+        logging.info('install caddy configure file')
+        Downloader(self._get_github_url('misc/config.caddy')).save('caddyFile')
+        shutil.move(OSHelper.get_temp(file='caddyFile'), '/etc/caddy/Caddyfile')
+        os.chmod('/etc/caddy/Caddyfile', 0o644)
+
+        logging.info('install caddy v2ray vhost file')
+        Downloader(self._get_github_url('misc/v2ray.caddy')).save('v2ray.caddy')
+        shutil.move(OSHelper.get_temp(file='v2ray.caddy'), '/etc/caddy/conf.d/v2ray.conf')
+        FileHelper.replace('/etc/caddy/conf.d/v2ray.conf', [
+            ['placeholder_com', domain],
+            ['ws_path', self._ws_path]
+        ])
+
+        # give privileges to bind port lower than 1024
+        CommandHelper.execute('setcap cap_net_bind_service=+ep /usr/local/bin/caddy')
+
+        Downloader('https://raw.githubusercontent.com/mholt/caddy/master/dist/init/linux-systemd/caddy.service').save(
+            'caddy.service')
+        shutil.move(OSHelper.get_temp(file='caddy.service'), '/etc/systemd/system/caddy.service')
+        FileHelper.replace('/etc/systemd/system/caddy.service', [
+            ['www-data', 'caddy']
+        ])
+        os.chmod('/etc/systemd/system/caddy.service', 0o644)
+
+        logging.info('start caddy server')
+        CommandHelper.execute('systemctl enable caddy')
+        CommandHelper.execute('systemctl start caddy')
+
+        logging.info('caddy successfully installed')
+        mark = pathlib.Path('{}/{}'.format(self._get_conf_dir(), 'caddy_installed'))
+        mark.touch(exist_ok=True)
 
 
 class MacOSHandler(UnixLikeHandler):
@@ -519,6 +585,9 @@ class MacOSHandler(UnixLikeHandler):
         CommandHelper.execute('brew untap v2ray/v2ray')
         logging.info('Remove ')
 
+    def install_caddy(self, domain):
+        raise V2rayHelperException('Install caddy is not supported on this platform')
+
 
 class BSDHandler(UnixLikeHandler, ABC):
     def __init__(self, version, file_name):
@@ -530,6 +599,9 @@ class BSDHandler(UnixLikeHandler, ABC):
     @staticmethod
     def _get_os_base_path():
         return '/usr/local/bin'
+
+    def install_caddy(self, domain):
+        raise V2rayHelperException('Install caddy is not supported on this platform')
 
 
 class FreeBSDHandler(BSDHandler):
@@ -581,7 +653,7 @@ class OpenBSDHandler(BSDHandler):
 
     @staticmethod
     def _add_user_command():
-        return '{0}useradd -md /var/lib/{1} -s /sbin/nologin -g {1} {1}'
+        return '{0}useradd -md /var/lib/{1} -s {2} -g {1} {1}'
 
     def _install_control_script(self):
         Downloader(self._get_github_url('misc/v2ray.openbsd')).save('v2ray')
@@ -648,6 +720,8 @@ class Downloader:
 
     def save(self, _file_name=None):
         base_name = os.path.basename(urlparse(self._url).path)
+        if not base_name:
+            base_name = self._url
         file_name = _file_name if _file_name else base_name
 
         # full path
@@ -766,9 +840,9 @@ class OSHelper:
 
 class UnixLikeHelper(OSHelper):
     @staticmethod
-    def chown(path, user, group):
-        shutil.chown(path, user=user, group=group)
-        logging.debug('The owner of %s change to %s:%s', path, user, group)
+    def chown(path, user, _group):
+        shutil.chown(path, user=user, group=_group)
+        logging.debug('The owner of %s change to %s:%s', path, user, _group)
 
     @staticmethod
     def mkdir_chown(path, perm=0o755, user=None, group=None):
@@ -792,8 +866,9 @@ class UnixLikeHelper(OSHelper):
             # delete the home folder
             OSHelper.remove_if_exists('/var/lib/{}'.format(user_name))
 
-            create_user = '{0}useradd {1} -md /var/lib/{1} -s /sbin/nologin -g {1}'.format(prefix, user_name) \
-                if command is None else command.format(prefix, user_name)
+            nologin = shutil.which('nologin')
+            create_user = '{0}useradd {1} -md /var/lib/{1} -s {2} -g {1}'.format(prefix, user_name, nologin) \
+                if command is None else command.format(prefix, user_name, nologin)
 
             CommandHelper.execute(create_user)
 
@@ -999,10 +1074,21 @@ class V2rayHelper:
                 if args.force is False and version:
                     raise V2rayHelperException('V2Ray is already installed, use --force to reinstall.')
 
+                if args.websocket:
+                    if shutil.which('setcap') is None:
+                        raise V2rayHelperException('missing dependency libcap/libcap2')
+                    if not args.no_caddy and not args.domain:
+                        raise V2rayHelperException('Websocket domain cannot be empty, use --domain to set a domain')
+                    handler.use_websocket()
+
+                # install v2ray
                 handler.install()
+
+                if args.websocket and not args.no_caddy:
+                    handler.install_caddy(args.domain)
             elif args.upgrade:
                 if version is None:
-                    raise V2rayHelperException('V2Ray must be installed before you can upgrade it.')
+                    raise V2rayHelperException('V2Ray is not yet installed.')
 
                 # remove all letters
                 if version != ''.join([_ for _ in latest_version if not _.isalpha()]) or args.force:
@@ -1011,7 +1097,7 @@ class V2rayHelper:
                     raise V2rayHelperException('You already installed the latest version, use --force to upgrade.')
             elif args.remove:
                 if version is None:
-                    raise V2rayHelperException('V2Ray is not installed, you cannot uninstall it.')
+                    raise V2rayHelperException('V2Ray is not yet installed.')
                 handler.remove()
             elif args.purge:
                 handler.purge(args.sure)
@@ -1025,7 +1111,7 @@ class V2rayHelper:
                 args.install = True if version is None else False
                 args.upgrade = False if version is None else True
 
-                # forward back to executor function
+                # send back to executor function
                 executor()
 
         # execute the executor
@@ -1047,28 +1133,6 @@ class Utils:
             else:
                 return __on_except()
 
-    @staticmethod
-    def get_args():
-        root = argparse.ArgumentParser()
-
-        group = root.add_mutually_exclusive_group()
-        group.add_argument('--auto', action='store_true', default=True, help='automatic mode')
-
-        group1 = group.add_argument_group()
-        group3 = group1.add_mutually_exclusive_group()
-        group3.add_argument('--install', action='store_true', help='install v2ray')
-        group3.add_argument('--upgrade', action='store_true', help='upgrade v2ray')
-        group1.add_argument('--force', action='store_true', help='force to install or upgrade')
-        group.add_argument('--remove', action='store_true', help='remove v2ray')
-
-        group3 = group.add_argument_group()
-        group3.add_argument('--purge', action='store_true', help='remove v2ray and delete all configure files')
-        group3.add_argument('--sure', action='store_true', help='confirm action')
-
-        root.add_argument('--debug', action='store_true', help='show all logs')
-
-        return root.parse_args()
-
 
 @Decorators.signal_handler(signal.SIGINT)
 def _sigint_handler(signum, frame):
@@ -1077,7 +1141,30 @@ def _sigint_handler(signum, frame):
 
 
 if __name__ == "__main__":
-    args = Utils.get_args()
+    ap = argparse.ArgumentParser()
+
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument('--auto', action='store_true', default=True, help='automatic mode')
+
+    group1 = group.add_argument_group()
+    group3 = group1.add_mutually_exclusive_group()
+    group3.add_argument('--install', action='store_true', help='install v2ray')
+    group3.add_argument('--upgrade', action='store_true', help='upgrade v2ray')
+    group1.add_argument('--force', action='store_true', help='force to install or upgrade')
+    group.add_argument('--remove', action='store_true', help='remove v2ray')
+
+    group3 = ap.add_argument_group()
+    group3.add_argument('--purge', action='store_true', help='remove v2ray and delete all configure files')
+    group3.add_argument('--sure', action='store_true', help='confirm action')
+
+    group4 = ap.add_argument_group()
+    group4.add_argument('--websocket', action='store_true', help='use websocket instead of tcp', default=False)
+    group4.add_argument('--no-caddy', action='store_true', help='do not install caddy web server', default=False)
+    group4.add_argument('--domain', help='domain used for websocket', type=str, default=None)
+
+    ap.add_argument('--debug', action='store_true', help='show all logs')
+
+    args = ap.parse_args()
 
     # set logger
     logging.basicConfig(

@@ -474,8 +474,9 @@ class LinuxHandler(UnixLikeHandler):
         # create caddy conf folders
         OSHelper.mkdir('/etc/caddy')
         OSHelper.mkdir('/etc/caddy/conf.d')
-        OSHelper.mkdir('/etc/ssl/caddy', 0o770)
+        OSHelper.mkdir('/etc/ssl/caddy')
         UnixLikeHelper.chown('/etc/ssl/caddy', 'root', 'caddy')
+        os.chmod('/etc/ssl/caddy', 0o770)
 
         logging.info('install caddy configure file')
         Downloader(self._get_github_url('misc/config.caddy')).save('caddyFile')
@@ -818,7 +819,6 @@ class OSHelper:
 
     @staticmethod
     def remove_if_exists(path):
-
         if os.path.exists(path) or os.path.islink(path):
             if os.path.isdir(path):
                 logging.debug('Trying to delete directory %s', path)

@@ -494,7 +494,7 @@ class LinuxHandler(UnixLikeHandler):
         # give privileges to bind port lower than 1024
         CommandHelper.execute('setcap cap_net_bind_service=+ep /usr/local/bin/caddy')
 
-        Downloader('https://raw.githubusercontent.com/mholt/caddy/master/dist/init/linux-systemd/caddy.service').save(
+        Downloader('https://raw.githubusercontent.com/caddyserver/caddy/v1/dist/init/linux-systemd/caddy.service').save(
             'caddy.service')
         shutil.move(OSHelper.get_temp(file='caddy.service'), '/etc/systemd/system/caddy.service')
         FileHelper.replace('/etc/systemd/system/caddy.service', [

@@ -1,4 +1,4 @@
-placeholder_com {
+https://placeholder_com {
   proxy /ws_path 127.0.0.1:10086 {
     websocket
     keepalive 60

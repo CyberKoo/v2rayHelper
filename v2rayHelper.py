@@ -383,7 +383,9 @@ class UnixLikeHandler(OSHandler, ABC):
         # remove symbol links
         logging.info('Deleting symbol links')
         for name in self._executables:
-            OSHelper.remove_if_exists(shutil.which(name))
+            path = shutil.which(name)
+            if path != None:
+                OSHelper.remove_if_exists(path)
 
         # remove the real installed folder
         logging.info('Deleting v2ray directory')
@@ -412,6 +414,7 @@ class UnixLikeHandler(OSHandler, ABC):
         # delete all other file/folders
         logging.info('Deleting all other files')
         OSHelper.remove_if_exists('/etc/systemd/system/v2ray.service')
+        OSHelper.remove_if_exists('/etc/systemd/system/v2ray@.service')
 
 
 class LinuxHandler(UnixLikeHandler):

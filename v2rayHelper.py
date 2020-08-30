@@ -993,10 +993,20 @@ class V2RayAPI:
     @staticmethod
     def _get_arch(machine):
         arch_list = {
-            '32': ['i386'],
+            '32': ['i386', 'i686'],
             '64': ['x86_64', 'amd64'],
-            'arm': ['armv7l', 'armv7', 'armv7hf', 'armv7hl'],
-            'arm64': ['aarch64']
+            'arm32-v5': ['armv5tel'],
+            'arm32-v6': ['armv6l'],
+            'arm32-v7a': ['armv7', 'armv7l'],
+            'arm64-v8a': ['armv8', 'aarch64'],
+            'mips32': ['mips'],
+            'mips32le': ['mipsle'],
+            'mips64': ['mips64'],
+            'mips64le': ['mips64le'],
+            'ppc64': ['ppc64'],
+            'ppc64le': ['ppc64le'],
+            'riscv64': ['riscv64'],
+            's390x': ['s390x']
         }
 
         try:

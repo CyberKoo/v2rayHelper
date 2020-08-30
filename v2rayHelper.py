@@ -213,7 +213,7 @@ class OSHandler(ABC):
     @abstractmethod
     def purge(self, confirmed):
         if not confirmed:
-            raise V2rayHelperException('The following arguments are required: --sure')
+            raise V2rayHelperException('The following argument is required: --sure')
 
 
 class UnixLikeHandler(OSHandler, ABC):
@@ -276,9 +276,9 @@ class UnixLikeHandler(OSHandler, ABC):
         # change file and dir permission
         logging.debug('Change permission for dir %s', self._get_target_path())
         for root, dirs, files in os.walk(self._get_target_path()):
-            for dir_ in dirs:
-                logging.debug('Set dir permission %s to %d', os.path.join(root, dir_), 755)
-                os.chmod(os.path.join(root, dir_), 0o755)
+            for _dir in dirs:
+                logging.debug('Set dir permission %s to %d', os.path.join(root, _dir), 755)
+                os.chmod(os.path.join(root, _dir), 0o755)
             for file in files:
                 if file not in self._executables:
                     logging.debug('Set file permission %s to %d', os.path.join(root, file), 644)
@@ -418,7 +418,6 @@ class UnixLikeHandler(OSHandler, ABC):
 
 
 class LinuxHandler(UnixLikeHandler):
-
     def __init__(self, version, file_name):
         super().__init__(version, file_name, True)
 
@@ -947,7 +946,7 @@ class CommandHelper:
             return subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL).decode(encoding)
         else:
             def _try():
-                CommandHelper.execute('type {}'.format(command))
+                return CommandHelper.execute(command, encoding, False)
 
             return Utils.closure_try(_try, subprocess.CalledProcessError)
 
@@ -1137,14 +1136,14 @@ class Utils:
         return True if hasattr(arg, '__iter__') and not isinstance(arg, (str, bytes)) else False
 
     @staticmethod
-    def closure_try(__try, __except, __on_except=None):
+    def closure_try(_try, _except, _on_except=None):
         try:
-            return __try()
-        except __except:
-            if __on_except is None:
+            return _try()
+        except _except:
+            if _on_except is None:
                 return None
             else:
-                return __on_except()
+                return _on_except()
 
 
 @Decorators.signal_handler(signal.SIGINT)
@@ -1153,7 +1152,7 @@ def _sigint_handler(signum, frame):
     exit(signum)
 
 
-if __name__ == "__main__":
+def _get_args():
     ap = argparse.ArgumentParser()
 
     group = ap.add_mutually_exclusive_group()
@@ -1177,12 +1176,16 @@ if __name__ == "__main__":
 
     ap.add_argument('--debug', action='store_true', help='show all logs')
 
-    args = ap.parse_args()
+    return ap.parse_args()
+
+
+if __name__ == "__main__":
+    _args = _get_args()
 
     # set logger
     logging.basicConfig(
         format='%(asctime)s [%(threadName)s] [%(levelname)8s]  %(message)s',
-        level=logging.DEBUG if args.debug else logging.INFO,
+        level=logging.DEBUG if _args.debug else logging.INFO,
         handlers=[
             logging.StreamHandler()
         ]
@@ -1191,8 +1194,8 @@ if __name__ == "__main__":
     logging.debug('Debug model enabled')
 
     try:
-        helper = V2rayHelper()
-        helper.run(args)
+        _helper = V2rayHelper()
+        _helper.run(_args)
     # V2rayHelperException handling
     except V2rayHelperException as e:
         logging.critical(e)
